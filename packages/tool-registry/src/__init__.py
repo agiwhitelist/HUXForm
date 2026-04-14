@@ -1,1 +1,1 @@
-"""AGUI package."""
+"""Tool Registry package."""
