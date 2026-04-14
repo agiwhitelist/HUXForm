@@ -1,1 +1,1 @@
-"""AGUI package."""
+"""UI Renderer package."""
