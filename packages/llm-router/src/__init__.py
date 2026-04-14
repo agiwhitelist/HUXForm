@@ -1,1 +1,1 @@
-"""AGUI package."""
+"""LLM Router package."""
