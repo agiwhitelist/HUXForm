@@ -46,8 +46,20 @@ class MiniMaxProvider(BaseLLMProvider):
             temperature=kwargs.get("temperature", 0.7),
         )
 
+        # Handle MiniMax response which may include ThinkingBlock
+        text_content = ""
+        thinking_content = ""
+        for block in response.content:
+            if hasattr(block, 'text') and block.text:
+                text_content += block.text
+            elif hasattr(block, 'thinking') and block.thinking:
+                thinking_content = block.thinking
+
+        # Return text content (or thinking if no text)
+        final_content = text_content if text_content else thinking_content
+
         return LLMResponse(
-            content=response.content[0].text,
+            content=final_content,
             model=model,
             provider="minimax",
             usage={
