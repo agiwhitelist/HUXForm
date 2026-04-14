@@ -1,1 +1,1 @@
-"""AGUI package."""
+"""AGUI API package."""
