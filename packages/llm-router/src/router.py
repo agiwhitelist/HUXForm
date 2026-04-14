@@ -5,6 +5,7 @@ from typing import Any
 from .providers import BaseLLMProvider, LLMResponse
 from .anthropic_provider import AnthropicProvider
 from .openai_provider import OpenAIProvider
+from .minimax_provider import MiniMaxProvider
 from .registry import ModelConfig, get_model_config
 
 
@@ -15,8 +16,9 @@ class LLMRouter:
         self.providers: dict[str, BaseLLMProvider] = {
             "anthropic": AnthropicProvider(),
             "openai": OpenAIProvider(),
+            "minimax": MiniMaxProvider(),
         }
-        self._fallback_order = ["anthropic", "openai"]
+        self._fallback_order = ["minimax", "anthropic", "openai"]
 
     def add_provider(self, name: str, provider: BaseLLMProvider) -> None:
         """Add a custom provider."""

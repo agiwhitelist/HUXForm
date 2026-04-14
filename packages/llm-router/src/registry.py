@@ -68,6 +68,13 @@ MODEL_REGISTRY: dict[str, ModelConfig] = {
         supports_vision=False,
         supports_function_calling=True,
     ),
+    # MiniMax
+    "MiniMax-M2.7": ModelConfig(
+        name="MiniMax-M2.7",
+        provider="minimax",
+        supports_vision=False,
+        supports_function_calling=True,
+    ),
 }
 
 
