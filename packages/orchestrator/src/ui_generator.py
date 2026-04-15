@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from ui_dsl.schema import UIDocument, UIBlock, BlockType, ActionModel, ActionType
+from packages.ui_dsl.src.schema import UIDocument, UIBlock, BlockType, ActionModel, ActionType
 
 
 class UIGenerator:
