@@ -1,0 +1,32 @@
+version: "3.8"
+
+services:
+  api:
+    build:
+      context: .
+      target: api
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./apps/api:/app/apps/api
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8001 --reload
+
+  web:
+    build:
+      context: .
+      target: web
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./apps/web:/app/apps/web
+      - /app/apps/web/node_modules
+    command: npm run dev
+
+  nginx:
+    build:
+      context: .
+      target: production
+    ports:
+      - "80:80"
+    depends_on:
+      - api
