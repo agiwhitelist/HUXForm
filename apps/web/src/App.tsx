@@ -1,492 +1,420 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { Routes, Route, Link, useLocation } from 'react-router-dom';
-import { ChatInterface, MessageBubble, UserInput, ActionButton, UISchemaViewer } from './components/neumorphic';
-import { LoadingSpinner } from './components/LoadingSpinner';
-import { HistorySidebar } from './components/HistorySidebar';
-import { SessionSelector } from './components/SessionSelector';
-import { UIDocumentRenderer } from './components/UIDocumentRenderer';
-import { UIDocument } from './components/registry';
-import { useSession } from './hooks/useSession';
-import { useChatHistory } from './hooks/useChatHistory';
-import { useActions } from './hooks/useActions';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { ApprovalRequest, Bridge, TaskEvent } from "./bridge";
 
-// Collaboration Status Badge Component
-interface CollaborationStatusProps {
-  isConnected: boolean;
-  tabCount: number;
-}
+type TaskPlan = {
+  task_type: string;
+  presentation_mode: string;
+  visual_concept: string;
+  rationale: string;
+  steps: string[];
+  tool_hints: string[];
+  needs_user_input: boolean;
+};
 
-function CollaborationStatus({ isConnected, tabCount }: CollaborationStatusProps) {
-  return (
-    <div className="collaboration-status" title={`${tabCount} tab${tabCount !== 1 ? 's' : ''} connected`}>
-      <span className={`status-dot ${isConnected ? 'connected' : 'disconnected'}`} />
-      <span className="status-label">{isConnected ? 'Connected' : 'Disconnected'}</span>
-      {tabCount > 1 && <span className="tab-count">({tabCount})</span>}
-    </div>
-  );
-}
-
-// Types
-interface Message {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  timestamp?: Date;
-  metadata?: {
-    status?: 'sent' | 'delivered' | 'read';
-    error?: boolean;
-    ui_document?: UIDocument;
-  };
-}
-
-interface UIBlock {
+type TaskSnapshot = {
   id: string;
-  type: string;
-  content: Record<string, unknown>;
-  actions?: Array<{
-    id: string;
-    type: 'button' | 'link' | 'submit' | 'navigate';
-    label: string;
-    disabled?: boolean;
-    icon?: string;
-  }>;
-  metadata?: Record<string, unknown>;
-}
+  goal: string;
+  status: string;
+  plan: TaskPlan | null;
+  state: Record<string, unknown>;
+  final_result: unknown;
+  error: string | null;
+  has_ui: boolean;
+};
 
-// Chat Page Component
-interface ChatPageProps {
-  chatHistory: ReturnType<typeof useChatHistory>['chatHistory'];
-  addMessage: ReturnType<typeof useChatHistory>['addMessage'];
-}
+type Tool = {
+  name: string;
+  title: string;
+  description: string;
+  risk: string;
+  requires_approval: boolean;
+  params: Record<string, unknown>;
+};
 
-function ChatPage({ chatHistory, addMessage }: ChatPageProps) {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [inputValue, setInputValue] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+const EXAMPLES = [
+  "Проверь этот CSV на дубли (я его сейчас загружу).",
+  "Найди 10 Instagram-блогеров для рекламы FasonAI, бюджет 5-10к ₽.",
+  "Подготовь маркетинговый аудит лендинга example.com.",
+  "Сравни 3 платёжные системы для SaaS из РФ.",
+  "Объясни, что такое MCP, в трёх абзацах.",
+];
+
+export function App() {
+  const [goal, setGoal] = useState("");
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const [snapshot, setSnapshot] = useState<TaskSnapshot | null>(null);
+  const [events, setEvents] = useState<TaskEvent[]>([]);
+  const [tools, setTools] = useState<Tool[]>([]);
+  const [iframeReady, setIframeReady] = useState(false);
+  const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const { submitAction } = useActions();
+  const [submitting, setSubmitting] = useState(false);
 
-  // Handle actions from UI blocks (forms, buttons, etc.)
-  const handleBlockAction = useCallback(async (action: { id: string; type: string; label: string; params?: Record<string, unknown> }) => {
-    const result = await submitAction(action.id, action.params || {});
-    if (result?.success && result.ui_document) {
-      // Add the returned ui_document as a new assistant message
-      const uiDocMessage: Message = {
-        role: 'assistant',
-        content: 'Action completed',
-        timestamp: new Date(),
-        metadata: { ui_document: result.ui_document as UIDocument },
-      };
-      setMessages(prev => [...prev, uiDocMessage]);
-      if (addMessage) {
-        addMessage(uiDocMessage);
-      }
-    }
-  }, [submitAction, addMessage]);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const bridgeRef = useRef<Bridge | null>(null);
+  const reloadTimer = useRef<number | null>(null);
 
-  // Load chat history when session changes
+  // Fetch tool list once for the boot payload
   useEffect(() => {
-    if (chatHistory?.messages) {
-      setMessages(chatHistory.messages as Message[]);
-    } else {
-      setMessages([]);
-    }
-  }, [chatHistory]);
-
-  const handleSendMessage = useCallback(async () => {
-    if (!inputValue.trim() || isLoading) return;
-
-    const userMessage: Message = {
-      role: 'user',
-      content: inputValue.trim(),
-      timestamp: new Date(),
-      metadata: { status: 'sent' },
-    };
-
-    setMessages(prev => [...prev, userMessage]);
-    if (addMessage) {
-      addMessage(userMessage);
-    }
-    setInputValue('');
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const response = await fetch('/api/v1/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messages: [...messages, userMessage].map(({ role, content }) => ({ role, content })),
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      const assistantMessage: Message = {
-        role: 'assistant',
-        content: data.message?.content || 'No response',
-        timestamp: new Date(),
-        metadata: { status: 'delivered' },
-      };
-
-      setMessages(prev => [...prev, assistantMessage]);
-      if (addMessage) {
-        addMessage(assistantMessage);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send message');
-      // Add error message bubble
-      const errorMessage: Message = {
-        role: 'assistant',
-        content: 'Sorry, I encountered an error. Please try again.',
-        timestamp: new Date(),
-        metadata: { error: true },
-      };
-      setMessages(prev => [...prev, errorMessage]);
-      if (addMessage) {
-        addMessage(errorMessage);
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  }, [inputValue, messages, isLoading, addMessage]);
-
-  return (
-    <div className="chat-page">
-      <ChatInterface loading={isLoading}>
-        <div className="messages-container">
-          {isLoading && messages.length === 0 ? (
-            <div className="loading-state">
-              <LoadingSpinner size="lg" />
-              <p>Thinking...</p>
-            </div>
-          ) : messages.length === 0 ? (
-            <div className="empty-state">
-              <p>Start a conversation by typing a message below.</p>
-            </div>
-          ) : (
-            messages.map((msg, index) => (
-              <div key={index} className="message-wrapper">
-                <MessageBubble
-                  role={msg.role}
-                  content={msg.content}
-                  timestamp={msg.timestamp}
-                  metadata={msg.metadata}
-                />
-                {msg.metadata?.ui_document && (
-                  <UIDocumentRenderer ui_document={msg.metadata.ui_document} onAction={handleBlockAction} />
-                )}
-              </div>
-            ))
-          )}
-        </div>
-        {error && (
-          <div className="error-container">
-            <div className="error-message">{error}</div>
-            <ActionButton
-              label="Retry"
-              onClick={handleSendMessage}
-              variant="primary"
-              disabled={!inputValue.trim() && messages.length > 0}
-            />
-          </div>
-        )}
-        <div className="input-container">
-          <UserInput
-            value={inputValue}
-            onChange={setInputValue}
-            placeholder="Type a message..."
-            disabled={isLoading}
-            onSubmit={handleSendMessage}
-          />
-          <ActionButton
-            label="Send"
-            onClick={handleSendMessage}
-            variant="primary"
-            loading={isLoading}
-            disabled={!inputValue.trim()}
-          />
-        </div>
-      </ChatInterface>
-    </div>
-  );
-}
-
-// Schema Page Component
-function SchemaPage() {
-  const [blocks, setBlocks] = useState<UIBlock[]>([]);
-  const [selectedBlockId, setSelectedBlockId] = useState<string | undefined>();
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchSchema = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const response = await fetch('/api/v1/ui-schema');
-      if (!response.ok) {
-        throw new Error(`HTTP error: ${response.status}`);
-      }
-      const data = await response.json();
-      // Handle both array and object with blocks property
-      setBlocks(Array.isArray(data) ? data : data.blocks || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch schema');
-      // Use sample data for demo
-      setBlocks([
-        {
-          id: 'sample-1',
-          type: 'card',
-          content: { title: 'Welcome Card', description: 'This is a sample UI block' },
-          actions: [{ id: 'action-1', type: 'button', label: 'Get Started' }],
-        },
-        {
-          id: 'sample-2',
-          type: 'text',
-          content: { title: 'Information', description: 'Sample text block content' },
-        },
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
+    fetch("/api/tools")
+      .then((r) => r.json())
+      .then((d) => setTools(d.tools || []))
+      .catch(() => setTools([]));
   }, []);
 
-  // Fetch schema on mount
-  React.useEffect(() => {
-    fetchSchema();
-  }, [fetchSchema]);
-
-  return (
-    <div className="schema-page">
-      <div className="schema-header">
-        <h1 className="schema-title">UI Schema Viewer</h1>
-        <ActionButton
-          label="Refresh"
-          onClick={fetchSchema}
-          variant="secondary"
-          loading={isLoading}
-        />
-      </div>
-      {error && <div className="error-message">{error}</div>}
-      <UISchemaViewer
-        blocks={blocks}
-        selectedBlockId={selectedBlockId}
-        onBlockSelect={(block) => setSelectedBlockId(block.id)}
-      />
-    </div>
-  );
-}
-
-// Main App Component
-export default function App() {
-  const location = useLocation();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  // Real-time collaboration state
-  const [collaborationStatus, setCollaborationStatus] = useState({ isConnected: false, tabCount: 1 });
-  const channelRef = useRef<BroadcastChannel | null>(null);
-  const tabIdRef = useRef<string>(Date.now().toString());
-
-  // Set up BroadcastChannel for cross-tab communication
+  // Poll snapshot until UI is ready, then stop
   useEffect(() => {
-    if (typeof BroadcastChannel === 'undefined') {
-      return;
-    }
-
-    const channel = new BroadcastChannel('agui-collaboration');
-    channelRef.current = channel;
-
-    // Announce this tab is active
-    channel.postMessage({ type: 'tab-active', tabId: tabIdRef.current, timestamp: Date.now() });
-
-    channel.onmessage = (event) => {
-      const data = event.data;
-      if (data.type === 'tab-active' || data.type === 'tab-closed') {
-        // Count active tabs periodically
-        setCollaborationStatus(prev => ({
-          ...prev,
-          isConnected: true,
-          tabCount: prev.tabCount,
-        }));
+    if (!taskId) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await fetch(`/api/tasks/${taskId}`);
+        const d: TaskSnapshot = await r.json();
+        if (cancelled) return;
+        setSnapshot(d);
+        if (d.has_ui && !iframeReady) {
+          // Force the iframe to load now that HTML is available
+          const f = iframeRef.current;
+          if (f) f.src = `/api/tasks/${taskId}/ui?t=${Date.now()}`;
+          setIframeReady(true);
+        }
+      } catch {
+        // ignore
       }
     };
-
-    // Handle incoming messages to track tab count
-    let activeTabs = new Set([tabIdRef.current]);
-    channel.onmessage = (event) => {
-      const data = event.data;
-      if (data.type === 'tab-active' && data.tabId !== tabIdRef.current) {
-        activeTabs.add(data.tabId);
-      } else if (data.type === 'tab-closed' || data.type === 'tab-inactive') {
-        activeTabs.delete(data.tabId);
-      }
-      setCollaborationStatus({
-        isConnected: activeTabs.size > 0,
-        tabCount: activeTabs.size,
-      });
-    };
-
-    // Announce tab closing on unload
-    const handleBeforeUnload = () => {
-      channel.postMessage({ type: 'tab-closed', tabId: tabIdRef.current });
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-
-    // Periodic heartbeat to maintain tab count
-    const heartbeat = setInterval(() => {
-      channel.postMessage({ type: 'tab-active', tabId: tabIdRef.current, timestamp: Date.now() });
-    }, 5000);
-
-    setCollaborationStatus({ isConnected: true, tabCount: 1 });
-
+    tick();
+    const handle = window.setInterval(tick, 1200);
     return () => {
-      channel.postMessage({ type: 'tab-closed', tabId: tabIdRef.current });
-      channel.close();
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      clearInterval(heartbeat);
+      cancelled = true;
+      clearInterval(handle);
     };
+  }, [taskId, iframeReady]);
+
+  // Set up bridge when iframe is rendered
+  useEffect(() => {
+    if (!taskId) return;
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    const bridge = new Bridge({
+      iframe,
+      taskId,
+      onEvent: (ev) => {
+        setEvents((prev) => {
+          const next = prev.concat(ev);
+          return next.length > 400 ? next.slice(-400) : next;
+        });
+      },
+      onApprovalRequest: (req) => {
+        setApprovals((prev) => prev.concat(req));
+      },
+    });
+    bridge.attachEventStream();
+    bridgeRef.current = bridge;
+    return () => {
+      bridge.destroy();
+      bridgeRef.current = null;
+    };
+  }, [taskId]);
+
+  // Re-send boot payload whenever the plan/tools change (so the iframe boots correctly after reload)
+  useEffect(() => {
+    if (!bridgeRef.current || !snapshot?.plan) return;
+    bridgeRef.current.setBootPayload({
+      plan: snapshot.plan,
+      tools,
+      goal: snapshot.goal,
+    });
+  }, [snapshot?.plan, tools, snapshot?.goal]);
+
+  const onSubmit = useCallback(async () => {
+    const text = goal.trim();
+    if (!text || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    setEvents([]);
+    setApprovals([]);
+    setIframeReady(false);
+    setSnapshot(null);
+    setTaskId(null);
+    try {
+      const r = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ goal: text }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      setTaskId(d.task_id);
+    } catch (e: any) {
+      setError(e?.message ?? String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  }, [goal, submitting]);
+
+  const reset = useCallback(() => {
+    if (reloadTimer.current) window.clearTimeout(reloadTimer.current);
+    setTaskId(null);
+    setSnapshot(null);
+    setEvents([]);
+    setApprovals([]);
+    setIframeReady(false);
+    setError(null);
   }, []);
 
-  const {
-    currentSession,
-    sessions,
-    createSession,
-    switchSession,
-    renameSession,
-    deleteSession,
-    addSession,
-  } = useSession();
-
-  const { chatHistory, addMessage, deleteHistoryForSession, allHistories } = useChatHistory(currentSession);
-
-  // Export chat history as JSON
-  const handleExportChatHistory = useCallback(() => {
-    if (!currentSession) {
-      alert('No current session to export.');
-      return;
+  const resolveApproval = useCallback((req: ApprovalRequest, ok: boolean) => {
+    setApprovals((prev) => prev.filter((a) => a.id !== req.id));
+    if (req.source === "backend" && req.approvalId) {
+      bridgeRef.current?.resolveBackendApproval(req.approvalId, ok);
+    } else {
+      bridgeRef.current?.resolveIframeApproval(req.id, ok);
     }
+  }, []);
 
-    const dataToExport = allHistories[`history_${currentSession.id}`] || null;
-
-    if (!dataToExport) {
-      alert('No chat history to export for the current session.');
-      return;
-    }
-
-    const sessionId = currentSession.id;
-    const sessionName = currentSession.name;
-
-    const exportData = {
-      sessionId,
-      sessionName,
-      exportedAt: new Date().toISOString(),
-      messages: dataToExport.messages.map(m => ({
-        role: m.role,
-        content: m.content,
-        timestamp: m.timestamp instanceof Date ? m.timestamp.toISOString() : m.timestamp,
-        metadata: m.metadata,
-      })),
-    };
-
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `chat-history-${sessionId}-${Date.now()}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, [currentSession, allHistories]);
-
-  const handleNewSession = useCallback(() => {
-    const newSession = createSession();
-    addSession(newSession);
-    setSidebarOpen(false);
-  }, [createSession, addSession]);
-
-  const handleSessionSelect = useCallback((session: typeof currentSession) => {
-    if (session) {
-      switchSession(session.id);
-      setSidebarOpen(false);
-    }
-  }, [switchSession]);
-
-  const handleDeleteSession = useCallback((sessionId: string) => {
-    deleteSession(sessionId);
-    deleteHistoryForSession(sessionId);
-  }, [deleteSession, deleteHistoryForSession]);
+  const status = snapshot?.status ?? (taskId ? "starting" : "idle");
+  const plan = snapshot?.plan ?? null;
 
   return (
     <div className="app">
-      <HistorySidebar
-        sessions={sessions}
-        currentSession={currentSession}
-        onSessionSelect={handleSessionSelect}
-        onNewSession={handleNewSession}
-        onDeleteSession={handleDeleteSession}
-        onRenameSession={renameSession}
-        onClose={() => setSidebarOpen(false)}
-        isOpen={sidebarOpen}
-      />
-      <header className="app-header">
-        <div className="header-left">
-          <button
-            className="menu-button"
-            onClick={() => setSidebarOpen(true)}
-            aria-label="Open history"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M3 12h18M3 6h18M3 18h18" />
-            </svg>
-          </button>
-          <h1 className="app-title">AGUI Agent</h1>
-          <SessionSelector
-            currentSession={currentSession}
-            onSessionSelect={handleSessionSelect}
-            onNewSession={handleNewSession}
-            sessions={sessions}
-          />
+      <header className="topbar">
+        <div className="brand">
+          <span className="dot" />
+          <span className="brand-name">AGUI</span>
+          <span className="brand-sub">generative human-experience runtime</span>
         </div>
-        <nav className="nav-links">
-          <Link to="/">
-            <ActionButton
-              label="Chat"
-              variant={location.pathname === '/' ? 'primary' : 'secondary'}
-              onClick={() => {}}
-            />
-          </Link>
-          <Link to="/schema">
-            <ActionButton
-              label="Schema"
-              variant={location.pathname === '/schema' ? 'primary' : 'secondary'}
-              onClick={() => {}}
-            />
-          </Link>
-        </nav>
-        <div className="header-right">
-          <button
-            className="export-button"
-            onClick={handleExportChatHistory}
-            title="Export chat history as JSON"
-            aria-label="Export chat history"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
-            </svg>
+        {taskId && (
+          <button className="ghost" onClick={reset}>
+            New task
           </button>
-          <CollaborationStatus isConnected={collaborationStatus.isConnected} tabCount={collaborationStatus.tabCount} />
-        </div>
+        )}
       </header>
-      <Routes>
-        <Route path="/" element={<ChatPage chatHistory={chatHistory} addMessage={addMessage} />} />
-        <Route path="/schema" element={<SchemaPage />} />
-      </Routes>
+
+      {!taskId && (
+        <Landing
+          goal={goal}
+          setGoal={setGoal}
+          onSubmit={onSubmit}
+          submitting={submitting}
+          error={error}
+        />
+      )}
+
+      {taskId && (
+        <main className="workspace">
+          <aside className="sidebar">
+            <PlanPanel status={status} plan={plan} snapshot={snapshot} />
+            <EventsPanel events={events} />
+          </aside>
+          <section className="stage">
+            <iframe
+              ref={iframeRef}
+              className="stage-frame"
+              title="AGUI experience"
+              sandbox="allow-scripts allow-forms allow-pointer-lock allow-popups"
+              src="about:blank"
+            />
+          </section>
+        </main>
+      )}
+
+      {approvals.length > 0 && (
+        <ApprovalOverlay
+          requests={approvals}
+          onResolve={resolveApproval}
+        />
+      )}
+    </div>
+  );
+}
+
+function Landing(props: {
+  goal: string;
+  setGoal: (v: string) => void;
+  onSubmit: () => void;
+  submitting: boolean;
+  error: string | null;
+}) {
+  return (
+    <div className="landing">
+      <div className="landing-inner">
+        <h1>Опиши задачу — AGUI придумает интерфейс под неё.</h1>
+        <p className="lede">
+          Не чат. Не дашборд-конструктор. Каждый раз — мини-приложение,
+          сгенерированное под конкретную задачу, в безопасном sandbox.
+        </p>
+        <textarea
+          autoFocus
+          value={props.goal}
+          onChange={(e) => props.setGoal(e.target.value)}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") props.onSubmit();
+          }}
+          placeholder="Например: проверь этот CSV на дубли, или подбери блогеров для FasonAI…"
+          rows={5}
+        />
+        <div className="landing-actions">
+          <button
+            className="primary"
+            disabled={!props.goal.trim() || props.submitting}
+            onClick={props.onSubmit}
+          >
+            {props.submitting ? "Запускаю…" : "Generate experience  ⌘↵"}
+          </button>
+          {props.error && <span className="err">{props.error}</span>}
+        </div>
+        <div className="examples">
+          {EXAMPLES.map((e) => (
+            <button key={e} className="chip" onClick={() => props.setGoal(e)}>
+              {e}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlanPanel({
+  status,
+  plan,
+  snapshot,
+}: {
+  status: string;
+  plan: TaskPlan | null;
+  snapshot: TaskSnapshot | null;
+}) {
+  return (
+    <div className="panel">
+      <div className="panel-h">
+        <span className="status-pill" data-status={status}>
+          {status}
+        </span>
+        {plan && <span className="mode">{plan.presentation_mode}</span>}
+      </div>
+      {snapshot && <div className="goal">{snapshot.goal}</div>}
+      {plan ? (
+        <>
+          <div className="concept">{plan.visual_concept}</div>
+          <div className="rationale">{plan.rationale}</div>
+          <ol className="steps">
+            {plan.steps.map((s, i) => (
+              <li key={i}>{s}</li>
+            ))}
+          </ol>
+          {plan.tool_hints?.length > 0 && (
+            <div className="hints">
+              {plan.tool_hints.map((t) => (
+                <span key={t} className="tag">
+                  {t}
+                </span>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="dim">Planning…</div>
+      )}
+    </div>
+  );
+}
+
+function EventsPanel({ events }: { events: TaskEvent[] }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [events.length]);
+
+  const filtered = useMemo(
+    () => events.filter((e) => e.type !== "heartbeat"),
+    [events],
+  );
+  return (
+    <div className="panel events">
+      <div className="panel-h">
+        <span className="panel-title">events</span>
+        <span className="count">{filtered.length}</span>
+      </div>
+      <div className="events-list" ref={ref}>
+        {filtered.map((ev, i) => (
+          <EventRow key={i} ev={ev} />
+        ))}
+        {filtered.length === 0 && <div className="dim">No events yet.</div>}
+      </div>
+    </div>
+  );
+}
+
+function EventRow({ ev }: { ev: TaskEvent }) {
+  const type = String(ev.type);
+  let label = type;
+  let extra: string | null = null;
+  if (type === "tool_called") {
+    label = `→ ${ev.tool}`;
+    extra = ev.risk ? String(ev.risk) : null;
+  } else if (type === "tool_result") {
+    label = `✓ ${ev.tool}`;
+  } else if (type === "tool_error") {
+    label = `✗ ${ev.tool}`;
+    extra = String(ev.message ?? "");
+  } else if (type === "log") {
+    label = `· ${ev.message}`;
+    extra = String(ev.level ?? "");
+  } else if (type === "plan_ready") {
+    label = "plan ready";
+  } else if (type === "ui_ready") {
+    label = `ui ready (${ev.bytes}b)`;
+  } else if (type === "state_patch") {
+    label = "state patched";
+  } else if (type === "final_result") {
+    label = "final result";
+  } else if (type === "approval_required") {
+    label = `approval: ${ev.tool}`;
+  } else if (type === "failed") {
+    label = `failed: ${ev.message}`;
+  }
+  return (
+    <div className={`ev ev-${type}`}>
+      <span className="ev-label">{label}</span>
+      {extra && <span className="ev-extra">{extra}</span>}
+    </div>
+  );
+}
+
+function ApprovalOverlay({
+  requests,
+  onResolve,
+}: {
+  requests: ApprovalRequest[];
+  onResolve: (req: ApprovalRequest, ok: boolean) => void;
+}) {
+  const req = requests[0];
+  return (
+    <div className="overlay">
+      <div className="approval-card">
+        <div className="approval-h">Approval required</div>
+        <div className="approval-label">{req.label}</div>
+        {req.details ? (
+          <pre className="approval-details">
+            {JSON.stringify(req.details, null, 2)}
+          </pre>
+        ) : null}
+        <div className="approval-actions">
+          <button className="ghost" onClick={() => onResolve(req, false)}>
+            Deny
+          </button>
+          <button className="primary" onClick={() => onResolve(req, true)}>
+            Approve
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
