@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+# HUXForm — one-command bootstrap.
+#
+#   ./bin/huxform              # interactive: setup if needed, then start
+#   ./bin/huxform setup        # only run setup
+#   ./bin/huxform start        # start dev (api + web)
+#   ./bin/huxform doctor       # check deps + API key
+#   ./bin/huxform clean        # remove .venv and node_modules
+
+set -e
+
+ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+API="$ROOT/apps/api"
+WEB="$ROOT/apps/web"
+ENV_FILE="$ROOT/.env"
+SIGIL="◇"
+
+c_dim()    { printf "\033[2m%s\033[0m" "$1"; }
+c_ink()    { printf "\033[1;37m%s\033[0m" "$1"; }
+c_signal() { printf "\033[38;2;232;99;58m%s\033[0m" "$1"; }
+c_good()   { printf "\033[38;2;135;177;120m%s\033[0m" "$1"; }
+c_bad()    { printf "\033[31m%s\033[0m" "$1"; }
+
+sigil() {
+  echo ""
+  c_signal "$SIGIL"; printf " "; c_ink "HUXForm"; c_dim " — the interface takes the shape of the task"; echo
+  c_dim "  ────────────────────────────────────────────────────"; echo
+  echo ""
+}
+
+require() {
+  local cmd="$1"
+  local min="$2"
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    c_bad "  ✗  missing: $cmd ($min or newer)"; echo
+    return 1
+  fi
+  c_good "  ✓"; printf "  %s\n" "$cmd $(command -v "$cmd")"
+}
+
+doctor() {
+  sigil
+  c_dim "  preflight"; echo
+  echo
+  require python3 "3.11" || true
+  require node "20" || true
+  require npm "10" || true
+  echo
+  if [[ -f "$ENV_FILE" ]] && grep -q "AGUI_LLM_API_KEY=." "$ENV_FILE" && ! grep -q "AGUI_LLM_API_KEY=your_" "$ENV_FILE"; then
+    c_good "  ✓"; printf "  .env has an API key\n"
+  else
+    c_bad "  ✗"; printf "  .env is missing or has no API key (run: ./bin/huxform setup)\n"
+  fi
+  echo
+}
+
+prompt_env() {
+  if [[ -f "$ENV_FILE" ]] && grep -q "AGUI_LLM_API_KEY=." "$ENV_FILE" && ! grep -q "AGUI_LLM_API_KEY=your_" "$ENV_FILE"; then
+    return 0
+  fi
+  echo
+  c_dim "  HUXForm talks to any provider that speaks the Anthropic Messages or"; echo
+  c_dim "  OpenAI Chat Completions API. Default: MiniMax M2 (Anthropic-compatible)."; echo
+  echo
+  printf "  paste your "
+  c_ink "MiniMax API key"
+  printf "  ⟶  "
+  read -r key
+  if [[ -z "$key" ]]; then
+    c_bad "  no key — aborting."; echo
+    exit 1
+  fi
+  cat > "$ENV_FILE" <<EOF
+# HUXForm — LLM provider
+AGUI_LLM_PROTOCOL=anthropic
+AGUI_LLM_BASE_URL=https://api.minimax.io/anthropic
+AGUI_LLM_MODEL=MiniMax-M2
+AGUI_LLM_API_KEY=$key
+AGUI_LLM_MAX_TOKENS=4096
+AGUI_LLM_TEMPERATURE=0.6
+AGUI_DATA_DIR=.huxform-data
+EOF
+  c_good "  ✓  wrote .env"; echo
+}
+
+setup() {
+  sigil
+  c_dim "  setup"; echo
+  echo
+  prompt_env
+  echo
+  c_dim "  api · creating Python venv"; echo
+  (cd "$API" && python3 -m venv .venv 2>&1 | sed 's/^/    /')
+  c_dim "  api · installing dependencies"; echo
+  (cd "$API" && ./.venv/bin/python -m pip install --upgrade pip -q && ./.venv/bin/python -m pip install -e . -q 2>&1 | sed 's/^/    /' | tail -n 2)
+  echo
+  c_dim "  web · installing dependencies"; echo
+  (cd "$WEB" && npm install --silent 2>&1 | sed 's/^/    /' | tail -n 2)
+  echo
+  c_good "  ✓  setup complete."; echo
+  echo
+  c_dim "  next:  ./bin/huxform start"; echo
+}
+
+start() {
+  sigil
+  if [[ ! -d "$API/.venv" ]] || [[ ! -d "$WEB/node_modules" ]] || [[ ! -f "$ENV_FILE" ]]; then
+    c_dim "  first-run detected — running setup."; echo
+    setup
+    echo
+  fi
+
+  c_dim "  starting api on :8001 · web on :5173"; echo
+  c_dim "  open  http://localhost:5173  (will open in your browser)"; echo
+  echo
+
+  # Start API
+  (cd "$API" && exec ./.venv/bin/uvicorn src.main:app --host 127.0.0.1 --port 8001 --env-file "$ENV_FILE") > "$ROOT/.huxform-api.log" 2>&1 &
+  API_PID=$!
+
+  # Wait for API ready
+  for i in {1..40}; do
+    if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8001/health 2>/dev/null | grep -q 200; then
+      c_good "  ✓"; printf "  api ready (pid %d)\n" "$API_PID"; break
+    fi
+    sleep 0.5
+  done
+
+  # Start web
+  (cd "$WEB" && exec npm run dev --silent) > "$ROOT/.huxform-web.log" 2>&1 &
+  WEB_PID=$!
+
+  for i in {1..40}; do
+    if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5173 2>/dev/null | grep -q 200; then
+      c_good "  ✓"; printf "  web ready (pid %d)\n" "$WEB_PID"; break
+    fi
+    sleep 0.5
+  done
+
+  echo
+  c_ink "  → http://localhost:5173"; echo
+  echo
+  c_dim "  logs: .huxform-api.log · .huxform-web.log"; echo
+  c_dim "  press Ctrl+C to stop both processes"; echo
+
+  # Try opening browser
+  if command -v open >/dev/null 2>&1; then
+    open http://localhost:5173 2>/dev/null || true
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open http://localhost:5173 2>/dev/null || true
+  elif command -v start >/dev/null 2>&1; then
+    start http://localhost:5173 2>/dev/null || true
+  fi
+
+  trap "echo; c_dim '  stopping…'; echo; kill $API_PID $WEB_PID 2>/dev/null; exit 0" INT TERM
+  wait
+}
+
+clean() {
+  sigil
+  c_dim "  removing .venv and node_modules"; echo
+  rm -rf "$API/.venv" "$WEB/node_modules" "$ROOT/.huxform-data" "$ROOT/.huxform-api.log" "$ROOT/.huxform-web.log"
+  c_good "  ✓  clean."; echo
+}
+
+cmd="${1:-start}"
+case "$cmd" in
+  setup)  setup ;;
+  start)  start ;;
+  doctor) doctor ;;
+  clean)  clean ;;
+  *)
+    sigil
+    c_ink "  usage:"; echo
+    echo "    ./bin/huxform              start (run setup first if needed)"
+    echo "    ./bin/huxform setup        install dependencies, write .env"
+    echo "    ./bin/huxform doctor       check prerequisites"
+    echo "    ./bin/huxform clean        remove .venv, node_modules, data"
+    echo
+    ;;
+esac

@@ -68,7 +68,7 @@ from .tools import register_builtin_tools
 log = logging.getLogger("agui")
 
 
-DATA_DIR = Path(os.environ.get("AGUI_DATA_DIR", ".agui-data"))
+DATA_DIR = Path(os.environ.get("AGUI_DATA_DIR", ".huxform-data"))
 FILES_DIR = DATA_DIR / "files"
 DB_PATH = DATA_DIR / "agui.sqlite"
 AUDIT_DB_PATH = DATA_DIR / "audit.sqlite"
@@ -123,7 +123,7 @@ async def lifespan(app: FastAPI):
         audit.close()
 
 
-app = FastAPI(title="AGUI", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="HUXForm", version="0.3.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -433,6 +433,30 @@ async def download_file(file_id: str, request: Request) -> FileResponse:
     if rec is None:
         raise HTTPException(404, "file not found")
     return FileResponse(rec.path, filename=rec.name, media_type=rec.mime)
+
+
+class AttachFileBody(BaseModel):
+    file_id: str
+
+
+@app.post("/api/turns/{turn_id}/files")
+async def attach_file_to_turn(turn_id: str, body: AttachFileBody, request: Request) -> dict[str, Any]:
+    registry: Registry = request.app.state.registry
+    persistence: Persistence = request.app.state.persistence
+    turn = registry.get_turn(turn_id)
+    if turn is None:
+        raise HTTPException(404, "turn not found")
+    rec = registry.get_file(body.file_id)
+    if rec is None:
+        raise HTTPException(404, "file not found")
+    if body.file_id not in turn.file_ids:
+        turn.file_ids.append(body.file_id)
+        await persistence.save_turn(turn)
+        turn.emit({
+            "type": "file_attached",
+            "file": rec.to_public(),
+        })
+    return {"ok": True, "file": rec.to_public()}
 
 
 # ---------------------------------------------------------------------------

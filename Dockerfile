@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 #
-# AGUI image. Multi-stage:
+# HUXForm image. Multi-stage:
 #   api  — Python backend (FastAPI / uvicorn)
 #   web  — Vite build of the React shell
 #   prod — nginx serves /, proxies /api -> uvicorn on :8001

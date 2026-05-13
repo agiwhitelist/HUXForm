@@ -1,3 +1,14 @@
+/* AGUI Stage.
+ *
+ * The current turn IS the screen. Top thin "scribe" ribbon narrates what
+ * the agent is doing. The generated iframe fills everything below it. A
+ * follow-up bar lives at the bottom for refinements; the inspector hides
+ * to the side until you ask.
+ *
+ * No plan card by default. No event log on the page. The shell is silent
+ * unless the agent explicitly asks the human for a steering decision.
+ */
+
 import {
   useCallback,
   useEffect,
@@ -5,50 +16,50 @@ import {
   useRef,
   useState,
 } from "react";
-import { api, Turn as TurnSnap } from "./api";
+import { api, FileRec, Turn as TurnSnap } from "./api";
 import { ApprovalRequest, Bridge, TaskEvent } from "./bridge";
 
-type Props = {
-  turn: TurnSnap;
-  isLast: boolean;
-  tools: Array<{ name: string; title: string; description: string; risk: string; source: string }>;
-  onApprovalRequest: (req: ApprovalRequest) => void;
-  onTurnUpdated: (turn: TurnSnap) => void;
-  registerBridge: (id: string, bridge: Bridge | null) => void;
+type Tool = {
+  name: string;
+  title: string;
+  description: string;
+  risk: string;
+  source: string;
+  requires_approval: boolean;
 };
 
-export function TurnView({ turn: initial, isLast, tools, onApprovalRequest, onTurnUpdated, registerBridge }: Props) {
-  const [turn, setTurn] = useState<TurnSnap>(initial);
+export function Stage(props: {
+  turn: TurnSnap;
+  tools: Tool[];
+  inspectorOpen: boolean;
+  onToggleInspector: () => void;
+  onApprovalRequest: (req: ApprovalRequest) => void;
+  onTurnUpdated: (turn: TurnSnap) => void;
+  onFollowUp: (goal: string, fileIds: string[]) => Promise<void>;
+  registerBridge: (id: string, bridge: Bridge | null) => void;
+}) {
+  const [turn, setTurn] = useState<TurnSnap>(props.turn);
   const [events, setEvents] = useState<TaskEvent[]>([]);
-  const [narrations, setNarrations] = useState<
-    Array<{ text: string; tone: string; ts: number }>
-  >([]);
-  const [showInspector, setShowInspector] = useState(false);
+  const [latestNarration, setLatestNarration] = useState<string>("");
   const [iframeLoaded, setIframeLoaded] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
-  const [stageHidden, setStageHidden] = useState(false);
-  const [refineOpen, setRefineOpen] = useState(false);
-  const [refineNote, setRefineNote] = useState("");
-  const [regenBusy, setRegenBusy] = useState(false);
-  const uiVersionRef = useRef(0);
-
-  // Old turns auto-collapse their iframe (still in DOM, just hidden); user can expand.
-  useEffect(() => {
-    if (!isLast) setStageHidden(true);
-    else setStageHidden(false);
-  }, [isLast]);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const bridgeRef = useRef<Bridge | null>(null);
-  const onApprovalRef = useRef(onApprovalRequest);
-  onApprovalRef.current = onApprovalRequest;
+  const onApprovalRef = useRef(props.onApprovalRequest);
+  onApprovalRef.current = props.onApprovalRequest;
+  const onTurnUpdatedRef = useRef(props.onTurnUpdated);
+  onTurnUpdatedRef.current = props.onTurnUpdated;
+  const uiVersionRef = useRef(0);
 
-  // Replace local snapshot when parent provides a fresher one
+  // refresh local snapshot if parent gives a new turn (e.g. follow-up landed)
   useEffect(() => {
-    setTurn(initial);
-  }, [initial.id, initial.status, initial.has_ui]);
+    setTurn(props.turn);
+    setEvents([]);
+    setLatestNarration("");
+    setIframeLoaded(false);
+  }, [props.turn.id]);
 
-  // Drive bridge + SSE; lasts for the lifetime of this Turn
+  // bridge + SSE; restarts when turn id changes
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
@@ -60,16 +71,9 @@ export function TurnView({ turn: initial, isLast, tools, onApprovalRequest, onTu
           const next = prev.concat(ev);
           return next.length > 600 ? next.slice(-600) : next;
         });
-        if (ev.type === "narration") {
-          setNarrations((prev) =>
-            prev.concat({
-              text: String(ev.text ?? ""),
-              tone: String((ev as any).tone || "info"),
-              ts: (ev.ts as number) || Date.now() / 1000,
-            }),
-          );
+        if (ev.type === "narration" && typeof (ev as any).text === "string") {
+          setLatestNarration(String((ev as any).text));
         }
-        // Coalesce known transitions into snapshot state
         if (ev.type === "plan_ready" && ev.plan) {
           setTurn((p) => ({ ...p, plan: ev.plan as any, status: "awaiting_steer" }));
         } else if (ev.type === "awaiting_steer") {
@@ -79,7 +83,6 @@ export function TurnView({ turn: initial, isLast, tools, onApprovalRequest, onTu
         } else if (ev.type === "ui_ready") {
           setTurn((p) => ({ ...p, has_ui: true, status: "running" }));
           if ((ev as any).regenerated) {
-            // Force-reload the iframe with a new src
             const f = iframeRef.current;
             if (f) {
               uiVersionRef.current += 1;
@@ -95,7 +98,6 @@ export function TurnView({ turn: initial, isLast, tools, onApprovalRequest, onTu
             ...p,
             status: "done",
             final_result: (ev as any).result ?? null,
-            answer_text: (ev as any).answer_only ? String(((ev as any).result || {}).answer || "") : p.answer_text,
           }));
         } else if (ev.type === "failed") {
           setTurn((p) => ({ ...p, status: "failed", error: String(ev.message ?? "") }));
@@ -107,395 +109,444 @@ export function TurnView({ turn: initial, isLast, tools, onApprovalRequest, onTu
     });
     bridge.attachEventStream();
     bridgeRef.current = bridge;
-    registerBridge(turn.id, bridge);
+    props.registerBridge(turn.id, bridge);
     return () => {
-      registerBridge(turn.id, null);
+      props.registerBridge(turn.id, null);
       bridge.destroy();
       bridgeRef.current = null;
     };
-  }, [turn.id, registerBridge]);
+  }, [turn.id]);
 
-  // Send boot payload to iframe once UI is ready
+  // ship boot payload to iframe when plan is known
   useEffect(() => {
     if (!bridgeRef.current || !turn.plan) return;
     bridgeRef.current.setBootPayload({
       plan: turn.plan,
-      tools,
+      tools: props.tools,
       goal: turn.user_message,
       files: turn.files,
     });
-  }, [turn.plan, tools, turn.user_message, turn.files]);
+  }, [turn.plan, props.tools, turn.user_message, turn.files]);
 
-  // Once has_ui flips true, load the iframe src.
+  // load iframe src once UI is ready
   useEffect(() => {
     if (!turn.has_ui) return;
     const f = iframeRef.current;
-    if (!f) return;
-    if (iframeLoaded) return;
+    if (!f || iframeLoaded) return;
     f.src = `/api/turns/${turn.id}/ui?t=${Date.now()}`;
     setIframeLoaded(true);
   }, [turn.has_ui, turn.id, iframeLoaded]);
 
-  // Bubble snapshot back up for sidebar/history
+  // bubble snapshot up
   useEffect(() => {
-    onTurnUpdated(turn);
-  }, [turn, onTurnUpdated]);
+    onTurnUpdatedRef.current(turn);
+  }, [turn]);
 
   const onProceed = useCallback(async () => {
-    try {
-      await api.proceed(turn.id);
-    } catch {}
+    try { await api.proceed(turn.id); } catch {}
   }, [turn.id]);
 
   const onCancel = useCallback(async () => {
-    try {
-      await api.cancel(turn.id);
-    } catch {}
+    try { await api.cancel(turn.id); } catch {}
   }, [turn.id]);
 
   const onRegenerate = useCallback(async () => {
-    if (regenBusy) return;
-    setRegenBusy(true);
-    try {
-      await api.regenerate(turn.id, refineNote.trim() || undefined);
-      setRefineNote("");
-      setRefineOpen(false);
-    } catch {} finally {
-      setRegenBusy(false);
-    }
-  }, [turn.id, refineNote, regenBusy]);
+    try { await api.regenerate(turn.id, undefined); } catch {}
+  }, [turn.id]);
 
-  const plan = turn.plan;
-  const brief = plan?.visual_brief || null;
+  const brief = turn.plan?.visual_brief || null;
   const status = turn.status;
-  const isAnswerOnly = plan?.presentation_mode === "answer_only";
-  const showStage = !isAnswerOnly && (status === "generating" || status === "running" || turn.has_ui);
-  const eventsFiltered = useMemo(
-    () => events.filter((e) => e.type !== "heartbeat"),
-    [events],
-  );
+  const isAwaitingSteer = status === "awaiting_steer";
+  const liveStep = useMemo(() => {
+    return scribeFromEvents(events, turn);
+  }, [events, turn]);
+
+  const tokensSummary = useMemo(() => {
+    const i = turn.usage?.input_tokens ?? 0;
+    const o = turn.usage?.output_tokens ?? 0;
+    if (!i && !o) return "";
+    return `${humanize(i)} ↘  ${humanize(o)} ↗`;
+  }, [turn.usage?.input_tokens, turn.usage?.output_tokens]);
 
   return (
-    <article className={`turn turn-${status}`}>
-      <div className="turn-user">
-        <span className="turn-user-tag">you</span>
-        <div className="turn-user-msg">
-          <div>{turn.user_message}</div>
-          {turn.files.length > 0 && (
-            <div className="user-files">
-              {turn.files.map((f) => (
-                <span key={f.id} className="file-pill">
-                  <span className="file-name">{f.name}</span>
-                  <span className="file-size">{fmtBytes(f.size)}</span>
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+    <section className="stage-app">
+      <Scribe
+        goal={turn.user_message}
+        live={latestNarration || liveStep}
+        status={status}
+        tokens={tokensSummary}
+        canCancel={status === "running" || status === "generating" || status === "planning"}
+        onCancel={onCancel}
+        onRegenerate={onRegenerate}
+        onInspector={props.onToggleInspector}
+        canRegenerate={status === "done" || status === "running" || status === "failed"}
+      />
 
-      {plan ? (
-        <PlanCard
-          plan={plan}
-          brief={brief}
-          status={status}
-          isLast={isLast}
-          onProceed={onProceed}
-          onCancel={onCancel}
-          onRegenerate={onRegenerate}
-          regenBusy={regenBusy}
-          refineOpen={refineOpen}
-          refineNote={refineNote}
-          onRefineToggle={() => setRefineOpen((v) => !v)}
-          onRefineChange={setRefineNote}
-          collapsed={collapsed && !isLast}
-          onToggleCollapsed={() => setCollapsed((v) => !v)}
+      <div className="stage-canvas">
+        <iframe
+          ref={iframeRef}
+          className="stage-frame"
+          title={`agui-${turn.id}`}
+          sandbox="allow-scripts allow-forms allow-pointer-lock allow-popups allow-modals"
+          src="about:blank"
         />
-      ) : (
-        <div className="plan-card plan-pending">
-          <div className="plan-pending-dot" />
-          <span>Reading the task and choosing the right shape…</span>
-        </div>
-      )}
 
-      {isAnswerOnly && (turn.answer_text || (turn.final_result as any)?.answer) && (
-        <AnswerOnlyBlock text={String(turn.answer_text || (turn.final_result as any)?.answer || "")} />
-      )}
-
-      {showStage && !collapsed && (
-        <>
-          {stageHidden ? (
-            <button className="stage-restore" onClick={() => setStageHidden(false)}>
-              Show generated experience
-            </button>
-          ) : (
-            <div className="stage-wrap">
-              {!isLast && (
-                <button
-                  className="stage-hide"
-                  onClick={() => setStageHidden(true)}
-                  title="Hide stage"
-                >–</button>
-              )}
-              <iframe
-                ref={iframeRef}
-                className="stage-frame"
-                title={`turn ${turn.id}`}
-                sandbox="allow-scripts allow-forms allow-pointer-lock allow-popups"
-                src="about:blank"
-              />
-              {!turn.has_ui && <StageSkeleton brief={brief} />}
-            </div>
-          )}
-        </>
-      )}
-
-      <NarrationStream items={narrations} />
-
-      <div className="turn-footer">
-        <span className={`status-pill status-${status}`}>{status}</span>
-        {turn.usage?.input_tokens != null && (
-          <span className="usage" title="LLM token usage">
-            in {turn.usage.input_tokens || 0} · out {turn.usage.output_tokens || 0}
-          </span>
+        {!turn.has_ui && status !== "failed" && (
+          <Curtain plan={turn.plan} brief={brief} status={status} />
         )}
-        {status === "running" && (
-          <button className="ghost small" onClick={onCancel}>Cancel</button>
+
+        {status === "failed" && <FailCard message={turn.error || "Something went wrong."} />}
+
+        {isAwaitingSteer && (
+          <SteerOverlay
+            concept={turn.plan?.visual_concept || ""}
+            rationale={turn.plan?.rationale || ""}
+            onProceed={onProceed}
+            onCancel={onCancel}
+          />
         )}
-        <button
-          className="ghost small"
-          onClick={() => setShowInspector((v) => !v)}
-        >
-          {showInspector ? "Hide inspector" : `Inspector · ${eventsFiltered.length}`}
-        </button>
       </div>
 
-      {showInspector && <Inspector events={eventsFiltered} />}
-    </article>
+      <FollowUp onSend={props.onFollowUp} disabled={status === "planning" || status === "generating"} />
+
+      {props.inspectorOpen && (
+        <Inspector
+          plan={turn.plan}
+          events={events}
+          onClose={props.onToggleInspector}
+        />
+      )}
+    </section>
   );
 }
 
 
-function PlanCard({
-  plan,
-  brief,
-  status,
-  isLast,
-  onProceed,
-  onCancel,
-  onRegenerate,
-  regenBusy,
-  refineOpen,
-  refineNote,
-  onRefineToggle,
-  onRefineChange,
-  collapsed,
-  onToggleCollapsed,
-}: {
-  plan: NonNullable<TurnSnap["plan"]>;
-  brief: ReturnType<() => any> | null;
+/* -------------------------------------------------------------------- */
+/* Scribe ribbon — the only chrome above the iframe                      */
+/* -------------------------------------------------------------------- */
+
+function Scribe(props: {
+  goal: string;
+  live: string;
   status: string;
-  isLast: boolean;
-  onProceed: () => void;
+  tokens: string;
+  canCancel: boolean;
   onCancel: () => void;
   onRegenerate: () => void;
-  regenBusy: boolean;
-  refineOpen: boolean;
-  refineNote: string;
-  onRefineToggle: () => void;
-  onRefineChange: (v: string) => void;
-  collapsed: boolean;
-  onToggleCollapsed: () => void;
+  canRegenerate: boolean;
+  onInspector: () => void;
 }) {
-  const canRegenerate =
-    isLast &&
-    plan.presentation_mode !== "answer_only" &&
-    (status === "running" || status === "done" || status === "failed");
-  const palette = brief?.palette || {};
-  const swatches = Object.entries(palette).slice(0, 6);
+  const showDot = props.status === "planning" || props.status === "generating" || props.status === "running";
   return (
-    <div className={`plan-card ${collapsed ? "plan-collapsed" : ""}`}>
-      <header className="plan-h">
-        <span className="plan-mode">{plan.presentation_mode}</span>
-        <span className="plan-concept">{plan.visual_concept}</span>
-        <button className="ghost xs" onClick={onToggleCollapsed}>
-          {collapsed ? "expand" : "collapse"}
+    <header className="scribe">
+      <span className="scribe-goal">{props.goal}</span>
+      <span className="scribe-sep" />
+      <span className="scribe-step">
+        {showDot && <span className="scribe-dot" />}
+        <span>{props.live || statusPhrase(props.status)}</span>
+      </span>
+      {props.tokens && <span className="scribe-meta">{props.tokens}</span>}
+      <div className="scribe-actions">
+        {props.canRegenerate && (
+          <button onClick={props.onRegenerate}>Regenerate</button>
+        )}
+        {props.canCancel && (
+          <button className="danger" onClick={props.onCancel}>
+            Cancel
+          </button>
+        )}
+        <button onClick={props.onInspector}>
+          Inspector
         </button>
-      </header>
+      </div>
+    </header>
+  );
+}
 
-      {!collapsed && (
-        <>
-          {plan.rationale && <p className="plan-rationale">{plan.rationale}</p>}
 
-          {brief?.metaphor && (
-            <p className="plan-metaphor">
-              <span className="kicker">metaphor</span> {brief.metaphor}
-            </p>
-          )}
+/* -------------------------------------------------------------------- */
+/* Curtain — what the user sees while codegen is still drawing the UI    */
+/* -------------------------------------------------------------------- */
 
-          {swatches.length > 0 && (
-            <div className="palette">
-              {swatches.map(([k, v]) => (
-                <span
-                  key={k}
-                  className="swatch"
-                  style={{ background: String(v) }}
-                  title={`${k}: ${v}`}
-                />
-              ))}
-            </div>
-          )}
+function Curtain(props: {
+  plan: TurnSnap["plan"];
+  brief: any;
+  status: string;
+}) {
+  const palette = props.brief?.palette || {};
+  const cols = Object.values(palette).filter(Boolean).slice(0, 6) as string[];
+  const concept = props.plan?.visual_concept || "";
+  const metaphor = props.brief?.metaphor || "";
+  const phase = props.status;
 
-          {plan.steps && plan.steps.length > 0 && (
-            <ol className="steps">
-              {plan.steps.map((s, i) => (
-                <li key={i}>{s}</li>
-              ))}
-            </ol>
-          )}
+  return (
+    <div className={`stage-curtain ${phase === "running" ? "gone" : ""}`}>
+      <div className="curtain-inner">
+        <div className="curtain-meta">{phaseLabel(phase)}</div>
+        {concept ? (
+          <h3 className="curtain-concept">{prettyConcept(concept)}</h3>
+        ) : (
+          <h3 className="curtain-concept">choosing a shape…</h3>
+        )}
+        {metaphor && <p className="curtain-metaphor">{metaphor}</p>}
+        {cols.length > 0 && (
+          <div className="curtain-swatch">
+            {cols.map((c, i) => (
+              <span key={i} style={{ background: c }} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
-          {plan.tool_hints && plan.tool_hints.length > 0 && (
-            <div className="hints">
-              {plan.tool_hints.map((t) => (
-                <span key={t} className="tag">
-                  {t}
-                </span>
-              ))}
-            </div>
-          )}
+function FailCard(props: { message: string }) {
+  return (
+    <div className="fail-card">
+      <span className="fail-h">The pipeline broke</span>
+      <span className="fail-msg">{props.message}</span>
+    </div>
+  );
+}
 
-          {brief?.inspirations && brief.inspirations.length > 0 && (
-            <p className="inspirations">
-              <span className="kicker">inspirations</span>{" "}
-              {brief.inspirations.join(" · ")}
-            </p>
-          )}
-        </>
-      )}
 
-      {status === "awaiting_steer" && (
-        <div className="plan-steer">
-          <span className="steer-prompt">Proceed with this approach?</span>
-          <button className="ghost" onClick={onCancel}>Cancel</button>
-          <button className="primary small" onClick={onProceed}>Proceed</button>
+/* -------------------------------------------------------------------- */
+/* Steer overlay — only when director asked for explicit confirmation    */
+/* -------------------------------------------------------------------- */
+
+function SteerOverlay(props: {
+  concept: string;
+  rationale: string;
+  onProceed: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="steer-overlay">
+      <div className="steer-card">
+        <span className="steer-h">Steering check</span>
+        <h3 className="steer-q">
+          Proceed with <em>{prettyConcept(props.concept) || "this approach"}</em>?
+        </h3>
+        {props.rationale && <p className="steer-rat">{props.rationale}</p>}
+        <div className="steer-row">
+          <button onClick={props.onCancel}>Cancel</button>
+          <button className="primary" onClick={props.onProceed}>
+            Proceed
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* -------------------------------------------------------------------- */
+/* Follow-up — slim, italic, lives below the stage                       */
+/* -------------------------------------------------------------------- */
+
+function FollowUp(props: {
+  onSend: (goal: string, fileIds: string[]) => Promise<void>;
+  disabled: boolean;
+}) {
+  const [text, setText] = useState("");
+  const [files, setFiles] = useState<FileRec[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const onSend = async () => {
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    try {
+      await props.onSend(text.trim(), files.map((f) => f.id));
+      setText("");
+      setFiles([]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="followup">
+      {files.length > 0 && (
+        <div className="followup-files">
+          {files.map((f) => (
+            <span key={f.id} className="attached-pill">
+              <span>{f.name}</span>
+              <button onClick={() => setFiles((p) => p.filter((x) => x.id !== f.id))}>×</button>
+            </span>
+          ))}
         </div>
       )}
-
-      {canRegenerate && !collapsed && (
-        <div className="plan-regen">
-          {!refineOpen ? (
-            <>
-              <button className="ghost xs" onClick={onRefineToggle}>
-                Refine…
-              </button>
-              <button
-                className="ghost xs"
-                onClick={onRegenerate}
-                disabled={regenBusy}
-                title="Regenerate the interface from the same plan"
-              >
-                {regenBusy ? "Regenerating…" : "Regenerate UI ↻"}
-              </button>
-            </>
-          ) : (
-            <div className="refine-row">
-              <input
-                autoFocus
-                className="refine-input"
-                value={refineNote}
-                placeholder="e.g. denser table, warmer palette, add export button"
-                onChange={(e) => onRefineChange(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") onRegenerate();
-                  if (e.key === "Escape") onRefineToggle();
-                }}
-              />
-              <button className="ghost xs" onClick={onRefineToggle}>cancel</button>
-              <button
-                className="primary small"
-                disabled={regenBusy}
-                onClick={onRegenerate}
-              >
-                {regenBusy ? "…" : "Apply"}
-              </button>
-            </div>
-          )}
-        </div>
-      )}
+      <span className="followup-mark">↳ refine</span>
+      <input
+        type="text"
+        value={text}
+        disabled={busy || props.disabled}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") onSend();
+        }}
+        placeholder="another shape, another lens, a smaller scope…"
+      />
+      <label className="followup-attach">
+        <input
+          type="file"
+          multiple
+          onChange={async (e) => {
+            const list = e.currentTarget.files;
+            e.currentTarget.value = "";
+            if (!list) return;
+            for (const f of Array.from(list)) {
+              try {
+                const rec = await api.uploadFile(f);
+                setFiles((p) => p.concat(rec));
+              } catch {}
+            }
+          }}
+        />
+        attach
+      </label>
+      <button
+        className="followup-send"
+        onClick={onSend}
+        disabled={!text.trim() || busy || props.disabled}
+      >
+        send
+      </button>
     </div>
   );
 }
 
 
-function StageSkeleton({ brief }: { brief: any }) {
-  const palette = brief?.palette || {};
-  const bg = palette.bg || palette.background || "#0d1015";
-  const ink = palette.ink || palette.fg || "#c9d3e3";
-  const accent = palette.accent || "#7aa2ff";
-  return (
-    <div className="stage-skeleton" style={{ background: bg, color: ink }}>
-      <div className="skeleton-bar" style={{ background: accent }} />
-      <div className="skeleton-msg">Designing — {brief?.metaphor || "task-specific interface"}…</div>
-    </div>
-  );
-}
+/* -------------------------------------------------------------------- */
+/* Inspector drawer                                                      */
+/* -------------------------------------------------------------------- */
 
-
-function AnswerOnlyBlock({ text }: { text: string }) {
-  const blocks = text.split(/\n\n+/);
-  return (
-    <div className="answer-only">
-      {blocks.map((b, i) => (
-        <p key={i}>{b}</p>
-      ))}
-    </div>
-  );
-}
-
-
-function NarrationStream({ items }: { items: Array<{ text: string; tone: string; ts: number }> }) {
-  const last = items[items.length - 1];
-  if (!last) return null;
-  return (
-    <div className={`narration tone-${last.tone}`}>
-      <span className="narration-pulse" />
-      <span className="narration-text">{last.text}</span>
-    </div>
-  );
-}
-
-
-function Inspector({ events }: { events: TaskEvent[] }) {
+function Inspector(props: {
+  plan: TurnSnap["plan"];
+  events: TaskEvent[];
+  onClose: () => void;
+}) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const filtered = useMemo(
+    () => props.events.filter((e) => e.type !== "heartbeat"),
+    [props.events],
+  );
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [events.length]);
+  }, [filtered.length]);
+
+  const brief = props.plan?.visual_brief;
+  const palette = brief?.palette || ({} as Record<string, string>);
+  const swatches = Object.values(palette).filter(Boolean).slice(0, 6) as string[];
+
   return (
-    <div className="inspector" ref={ref}>
-      {events.map((ev, i) => (
-        <div key={i} className={`ev ev-${ev.type}`}>
-          <span className="ev-ts">{fmtTime(ev.ts)}</span>
-          <span className="ev-label">{ev.type}</span>
-          <span className="ev-summary">{summarize(ev)}</span>
+    <aside className="inspector">
+      <div className="inspector-h">
+        <h3>Inspector</h3>
+        <span className="meta">⌘. · {filtered.length} events</span>
+      </div>
+      {props.plan && (
+        <div className="inspector-plan">
+          <h4>{props.plan.presentation_mode}</h4>
+          <span className="concept">{prettyConcept(props.plan.visual_concept)}</span>
+          {brief?.metaphor && <p className="metaphor">{brief.metaphor}</p>}
+          {swatches.length > 0 && (
+            <div className="swatches">
+              {swatches.map((c, i) => (
+                <span key={i} style={{ background: c }} />
+              ))}
+            </div>
+          )}
+          {props.plan.steps && props.plan.steps.length > 0 && (
+            <ol>
+              {props.plan.steps.map((s, i) => (
+                <li key={i}>{s}</li>
+              ))}
+            </ol>
+          )}
         </div>
-      ))}
-    </div>
+      )}
+      <div className="inspector-list" ref={ref}>
+        {filtered.map((ev, i) => (
+          <div key={i} className={`ev ev-${ev.type}`}>
+            <span className="ev-ts">{fmtTime(ev.ts)}</span>
+            <span className="ev-label">{ev.type}</span>
+            <span className="ev-summary">{summarize(ev)}</span>
+          </div>
+        ))}
+      </div>
+    </aside>
   );
+}
+
+
+/* -------------------------------------------------------------------- */
+/* Helpers                                                               */
+/* -------------------------------------------------------------------- */
+
+function statusPhrase(status: string): string {
+  switch (status) {
+    case "created":      return "reading the task";
+    case "planning":     return "deciding what shape to take";
+    case "awaiting_steer": return "waiting on your nod";
+    case "generating":   return "drawing the interface";
+    case "running":      return "alive";
+    case "done":         return "finished";
+    case "failed":       return "broken";
+    case "cancelled":    return "stopped";
+    default:             return status;
+  }
+}
+
+function phaseLabel(status: string): string {
+  switch (status) {
+    case "planning":   return "phase 01 · planning";
+    case "generating": return "phase 02 · drawing";
+    case "running":    return "phase 03 · running";
+    default:           return `phase · ${status}`;
+  }
+}
+
+function prettyConcept(s: string): string {
+  if (!s) return "";
+  return s.replace(/_/g, " ");
+}
+
+function scribeFromEvents(events: TaskEvent[], turn: TurnSnap): string {
+  if (turn.status === "awaiting_steer") {
+    return turn.plan?.visual_concept
+      ? `proposing ${prettyConcept(turn.plan.visual_concept)}`
+      : "awaiting your nod";
+  }
+  if (turn.status === "done") return "finished";
+  if (turn.status === "cancelled") return "stopped";
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e: any = events[i];
+    if (e.type === "narration") return String(e.text || "");
+    if (e.type === "tool_called") return `calling ${e.tool}`;
+    if (e.type === "tool_result") return `done ${e.tool}`;
+    if (e.type === "codegen_started") return "drawing the interface";
+    if (e.type === "planning_started") return "deciding what shape to take";
+  }
+  return statusPhrase(turn.status);
 }
 
 function summarize(ev: TaskEvent): string {
   const t = ev.type;
-  if (t === "tool_called") return `${(ev as any).tool}  ${(ev as any).risk}`;
-  if (t === "tool_result") return `${(ev as any).tool}`;
-  if (t === "tool_error") return `${(ev as any).tool}: ${(ev as any).message}`;
-  if (t === "log") return `[${(ev as any).level}] ${(ev as any).message}`;
-  if (t === "state_patch") return Object.keys((ev as any).patch || {}).join(", ");
-  if (t === "narration") return String((ev as any).text || "");
-  if (t === "ui_ready") return `${(ev as any).bytes} bytes`;
-  if (t === "approval_required") return `${(ev as any).tool}`;
-  if (t === "failed") return String((ev as any).message || "");
+  const a = ev as any;
+  if (t === "tool_called") return `${a.tool}  ${a.risk || ""}`;
+  if (t === "tool_result") return `${a.tool}`;
+  if (t === "tool_error") return `${a.tool}: ${a.message}`;
+  if (t === "log") return `[${a.level}] ${a.message}`;
+  if (t === "state_patch") return Object.keys(a.patch || {}).join(", ");
+  if (t === "narration") return String(a.text || "");
+  if (t === "ui_ready") return `${a.bytes} bytes`;
+  if (t === "approval_required") return `${a.tool}`;
+  if (t === "failed") return String(a.message || "");
+  if (t === "file_attached") return a.file?.name || "";
   return "";
 }
 
@@ -505,8 +556,9 @@ function fmtTime(ts: unknown): string {
   return d.toTimeString().slice(0, 8);
 }
 
-function fmtBytes(n: number): string {
-  if (n < 1024) return `${n}B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
-  return `${(n / 1024 / 1024).toFixed(1)}MB`;
+function humanize(n: number): string {
+  if (!n) return "0";
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(2)}M`;
 }

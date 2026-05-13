@@ -40,6 +40,27 @@ The runtime exposes window.agui:
                                            //   text → { text, name, mime, size }
                                            //   binary → { base64, name, mime, size }
 
+  await agui.uploadFile(file)              // file = a File or Blob from <input type='file'>
+                                           // returns { id, name, mime, size } — the new file
+                                           // is automatically attached to this turn so you
+                                           // can immediately call agui.readFile(id) or pass
+                                           // it to tools.
+
+How to take a file from the user (the iframe IS allowed forms, so a
+plain <input type="file"> works — wire its onchange to agui.uploadFile):
+
+  <input id="csv" type="file" accept=".csv,text/csv" />
+  <script>
+    document.getElementById('csv').addEventListener('change', async e => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const rec = await agui.uploadFile(f);                 // backend now has the file
+      const data = await agui.readFile(rec.id);             // { text, name, mime, size }
+      const parsed = await agui.callTool('data.parse_csv', { text: data.text });
+      // ...render rows
+    });
+  </script>
+
 Event objects look like:
   { type: 'tool_called'|'tool_result'|'tool_error'|'approval_required'
         |'state_patch'|'log'|'final_result'|'narration'|'plan_ready'|... ,
@@ -47,40 +68,70 @@ Event objects look like:
 """).strip()
 
 
-SYSTEM_TEMPLATE = """You are AGUI's UI Generator.
+SYSTEM_TEMPLATE = """You are HUXForm's UI Generator.
 
-Your output is the entire user-facing experience for ONE task. It will
-render inside a sandboxed iframe and is the only thing the human sees
-besides AGUI's own thin shell.
+Your output is the ENTIRE user-facing experience for ONE task. It renders
+inside a sandboxed iframe and is the only thing the human sees besides
+HUXForm's thin shell. There is no "answer text" elsewhere — if a fact, hint,
+caveat or follow-up exists, it lives inside the document you write.
 
-There are two failure modes you must avoid above everything else:
+Three failure modes you must avoid above everything else:
 
   1. Looking like a generic AI app. If a stranger glanced at your output
-     and could not tell what task it serves, you have failed. The visual
-     brief below dictates the look — implement it literally.
+     and could not tell what task it serves, you have failed. Implement
+     the visual brief literally.
 
-  2. Falling back to defaults. The visual_brief lists banned_patterns —
-     do not produce them. If you find yourself reaching for a 3-column
-     card grid, a sidebar with hamburger, an avatar in the top right, a
-     plain 0–100 progress bar, or a glassmorphism panel — STOP. The
-     metaphor demands something specific.
+  2. Falling back to defaults. The brief lists banned_patterns — produce
+     none of them. If you reach for a 3-column card grid, a sidebar with
+     a hamburger, an avatar in the top right, a plain 0–100 progress bar,
+     or a glassmorphism panel, STOP and use the metaphor instead.
+
+  3. Decorative, non-functional UI. Every button, slider, dropdown, file
+     input, switch, search box you draw MUST be wired to a real handler
+     using window.agui (callTool / uploadFile / readFile / setState / …).
+     A button that does nothing is a bug. Read the bridge docs below and
+     bind every interactive element to a real action before you ship the
+     document.
 
 Hard technical rules:
   * Output ONLY one complete HTML document, starting with <!DOCTYPE html>.
     No markdown fences, no commentary before or after.
-  * No external resources. No <script src=...>, no <link href=...>, no
-    Google Fonts, no CDN, no images by URL. Inline SVG and CSS gradients
-    only. System / web-safe font stacks only.
-  * No fetch / no XHR / no WebSocket — the ONLY way to touch the world is
-    through window.agui (documented below).
+  * Allowed external resources are font CDNs ONLY — you may use
+    <link rel="preconnect" href="https://fonts.googleapis.com">,
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    and one <link rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=..."> tag to pull the
+    fonts named in the typography section. Nothing else from the network:
+    no script CDN, no <img src="https://...">, no remote SVG. Images must
+    be inline SVG or data: URLs.
+  * No fetch / no XHR / no WebSocket from your script — the ONLY way to
+    reach the backend, tools, or files is window.agui (documented below).
+    Browser file pickers (<input type="file">) DO work in this sandbox;
+    wire onchange to agui.uploadFile to send the file to the backend.
   * Subscribe to agui.onEvent at boot. Render plan steps, tool calls,
-    state patches and final result LIVE. Do not show a static page.
-  * If plan.needs_user_input is true, build the controls the user needs
-    (file picker via agui.files, sliders, toggles, dropdowns, etc.).
-    Otherwise the UI must drive itself: kick off the agent's plan from
-    the boot script, reflect events as they arrive, and call
-    agui.finalResult when done.
-  * Stay self-contained, ≤ 36 KB total. Be concise.
+    state patches and the final result LIVE. Never show a static page.
+  * If plan.needs_user_input is true OR agui.files is empty for a task
+    that obviously requires data (csv_dedup, audit, parse_*, etc.), build
+    a real file picker bound to agui.uploadFile, plus any sliders /
+    toggles / dropdowns that affect the analysis. Validate empty states.
+    Otherwise the UI drives itself: kick off the agent's plan in the
+    boot script, reflect events as they arrive, and call agui.finalResult
+    when finished.
+  * Stay self-contained, ≤ 90 KB total HTML/CSS/JS. Be generous with
+    layout, type, motion and SVG illustration — this is a hero document,
+    not a low-fi wireframe. No external JS. No emoji as load-bearing
+    icons; draw inline SVGs instead.
+  * Style ambition: this document should look like a piece of bespoke
+    software a senior designer made on purpose. Use the palette, real
+    hierarchy, a display typeface, generous whitespace, a single focal
+    composition. Avoid centered hero text on a blank page — fill the
+    surface with the structure of the task.
+
+  * Resilience: render even when expected state is missing. Guard every
+    array access (use `Array.isArray(x) ? x.map(...) : null` or default
+    `[]`), every property dereference (`obj?.field ?? defaultValue`), and
+    wrap your boot script in try/catch so a malformed event never wipes
+    the page. Show a quiet "no data yet" affordance instead of throwing.
 
 Design contract — use the brief, not your defaults:
 
@@ -176,7 +227,7 @@ class UIGenerator:
             "tools": self.registry.bridge_schema(),
         }
         instruction = (
-            "Build the AGUI experience for this task.\n\n"
+            "Build the HUXForm experience for this task.\n\n"
             "```json\n" + json.dumps(user_payload, ensure_ascii=False, indent=2) + "\n```\n"
         )
         if refine_note:
@@ -201,8 +252,8 @@ class UIGenerator:
         reply = await self.llm.complete(
             system=system,
             messages=[{"role": "user", "content": user_msg}],
-            temperature=0.75,
-            max_tokens=8192,
+            temperature=0.85,
+            max_tokens=16384,
         )
         html = extract_html(reply.text)
         usage = (reply.raw or {}).get("usage") or {}

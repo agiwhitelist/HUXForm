@@ -1,6 +1,6 @@
 """Tiny provider-agnostic LLM client.
 
-We deliberately do not depend on vendor SDKs. AGUI's needs are simple:
+We deliberately do not depend on vendor SDKs. HUXForm's needs are simple:
 send a system prompt + a list of role/content messages, get back text.
 We support the two protocols that nearly every provider speaks:
 

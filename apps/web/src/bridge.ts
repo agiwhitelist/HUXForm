@@ -70,6 +70,7 @@ export class Bridge {
       "codegen_started", "ui_ready", "regenerating", "running",
       "tool_called", "tool_result", "tool_error", "tool_denied", "tool_dry_run",
       "approval_required", "state_patch", "log", "narration",
+      "file_attached",
       "final_result", "failed", "cancelled", "heartbeat",
     ].forEach((t) =>
       this.es!.addEventListener(t, handler as EventListener),
@@ -173,6 +174,47 @@ export class Bridge {
             __agui: true, kind: "response", id, ok: true, result: body.result,
           });
         }
+      } catch (err: any) {
+        this.postToIframe({
+          __agui: true, kind: "response", id, ok: false,
+          error: String(err?.message ?? err),
+        });
+      }
+      return;
+    }
+
+    if (kind === "upload") {
+      const { id, file, name } = data as {
+        id: string;
+        file: Blob;
+        name: string;
+      };
+      try {
+        if (!(file instanceof Blob)) {
+          throw new Error("uploadFile: payload is not a Blob/File");
+        }
+        // Re-read the cross-origin Blob into a same-origin one so the
+        // browser doesn't taint the FormData request.
+        const buf = await file.arrayBuffer();
+        const localBlob = new Blob([buf], { type: file.type || "application/octet-stream" });
+        const form = new FormData();
+        const filename = name || "upload";
+        form.append("file", localBlob, filename);
+        const up = await fetch("/api/files", { method: "POST", body: form });
+        const upBody = await up.json().catch(() => ({}));
+        if (!up.ok) {
+          throw new Error(upBody?.detail || `HTTP ${up.status}`);
+        }
+        const rec = upBody.file;
+        // Attach to this turn so files.read can resolve it.
+        await fetch(`/api/turns/${this.turnId}/files`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ file_id: rec.id }),
+        }).catch(() => {});
+        this.postToIframe({
+          __agui: true, kind: "response", id, ok: true, result: rec,
+        });
       } catch (err: any) {
         this.postToIframe({
           __agui: true, kind: "response", id, ok: false,

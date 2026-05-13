@@ -389,7 +389,7 @@ def register_builtin_tools(llm: LLMClient) -> ToolRegistry:
     _REGISTRY.register(Tool(
         name="llm.ask",
         title="Ask the underlying LLM",
-        description="Send a free-form prompt to AGUI's LLM. Use for short reasoning, summaries, copywriting.",
+        description="Send a free-form prompt to HUXForm's LLM. Use for short reasoning, summaries, copywriting.",
         risk="read",
         requires_approval=False,
         params_schema={"prompt": "string", "system?": "string"},

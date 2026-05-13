@@ -1,33 +1,62 @@
+/* AGUI shell.
+ *
+ * Not a chat. The whole product is a single stage: a moment of stillness
+ * (the prompt), then a generated interface that takes over the screen.
+ *
+ *   Landing      → one large prompt-slab. Press Enter / Cmd+Enter to begin.
+ *   Stage        → top scribe ribbon + full-bleed iframe + optional follow-up.
+ *   History      → fullscreen gallery of past sessions, summoned by `\` key.
+ *   Inspector    → side drawer for telemetry, off by default.
+ *
+ * The generated iframe (window.agui) is the source of interaction. The
+ * shell only narrates "what AGUI is doing" — it does not host the work.
+ */
+
 import {
   useCallback,
   useEffect,
   useRef,
   useState,
 } from "react";
-import { api, FileRec, ThreadSummary, Turn as TurnSnap } from "./api";
+import { api, FileRec, Thread, ThreadSummary, Turn as TurnSnap } from "./api";
 import { ApprovalRequest, Bridge } from "./bridge";
-import { TurnView } from "./Turn";
+import { Stage } from "./Turn";
 
 type Mode =
   | { kind: "landing" }
-  | { kind: "thread"; thread_id: string };
+  | { kind: "session"; thread_id: string };
 
-const EXAMPLES = [
-  "Проверь этот CSV на дубли (я его сейчас прикреплю).",
-  "Найди 10 Instagram-блогеров для рекламы FasonAI, бюджет 5–10к ₽.",
-  "Подготовь маркетинговый аудит лендинга example.com.",
-  "Сравни 3 платёжные системы для российского SaaS.",
-  "Объясни, что такое MCP, в трёх абзацах.",
+const HINTS = [
+  "check this CSV for duplicates",
+  "scout 10 Instagram creators for a $200 campaign",
+  "explain what MCP is",
+  "compare three payment processors for a SaaS",
+  "audit the landing page at example.com",
+  "deploy the project, then show me a health check",
+  "draft a one-pager for the next investor meeting",
+  "design a triage console for unresolved support tickets",
+];
+
+const HERO_VERBS = [
+  "look like",
+  "feel like",
+  "behave",
+  "respond",
+  "remember",
+  "answer",
 ];
 
 export function App() {
   const [mode, setMode] = useState<Mode>({ kind: "landing" });
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
-  const [turns, setTurns] = useState<TurnSnap[]>([]);
+  const [currentTurn, setCurrentTurn] = useState<TurnSnap | null>(null);
   const [tools, setTools] = useState<
     Array<{ name: string; title: string; description: string; risk: string; source: string; requires_approval: boolean }>
   >([]);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [planSwatches, setPlanSwatches] = useState<Record<string, string[]>>({});
   const bridgesByTurn = useRef<Map<string, Bridge>>(new Map());
 
   const registerBridge = useCallback((id: string, bridge: Bridge | null) => {
@@ -35,12 +64,12 @@ export function App() {
     else bridgesByTurn.current.delete(id);
   }, []);
 
-  // Tools registry (display only)
+  // load tool registry once
   useEffect(() => {
     api.tools().then((d) => setTools(d.tools as any)).catch(() => {});
   }, []);
 
-  // Threads list
+  // load thread list, refresh periodically
   const refreshThreads = useCallback(async () => {
     try {
       const d = await api.listThreads();
@@ -49,17 +78,23 @@ export function App() {
   }, []);
   useEffect(() => {
     refreshThreads();
+    const h = window.setInterval(refreshThreads, 8000);
+    return () => clearInterval(h);
   }, [refreshThreads]);
 
-  // Load a thread's turns when entering it
+  // when entering a session, load its latest turn
   useEffect(() => {
-    if (mode.kind !== "thread") return;
+    if (mode.kind !== "session") {
+      setCurrentTurn(null);
+      return;
+    }
     let cancelled = false;
     api
       .getThread(mode.thread_id)
-      .then((t) => {
+      .then((t: Thread) => {
         if (cancelled) return;
-        setTurns(t.turns);
+        const last = t.turns[t.turns.length - 1];
+        if (last) setCurrentTurn(last);
       })
       .catch(() => {});
     return () => {
@@ -67,15 +102,23 @@ export function App() {
     };
   }, [mode]);
 
-  // Periodically refresh threads list to update titles
+  // hotkeys: \ opens history, Esc closes overlays, ⌘. toggles inspector
   useEffect(() => {
-    const h = window.setInterval(refreshThreads, 5000);
-    return () => clearInterval(h);
-  }, [refreshThreads]);
-
-  const onTurnUpdated = useCallback((t: TurnSnap) => {
-    setTurns((prev) => prev.map((x) => (x.id === t.id ? t : x)));
-  }, []);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "\\" && !isTyping(e.target)) {
+        e.preventDefault();
+        setHistoryOpen((v) => !v);
+      } else if (e.key === "Escape") {
+        if (historyOpen) setHistoryOpen(false);
+        else if (inspectorOpen) setInspectorOpen(false);
+      } else if ((e.metaKey || e.ctrlKey) && e.key === ".") {
+        e.preventDefault();
+        setInspectorOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [historyOpen, inspectorOpen]);
 
   const onApprovalRequest = useCallback((req: ApprovalRequest) => {
     setApprovals((prev) => {
@@ -98,61 +141,136 @@ export function App() {
     [],
   );
 
-  const startFromLanding = useCallback(
-    async (goal: string, fileIds: string[], autoProceed: boolean) => {
-      const res = await api.createThread(goal, fileIds, autoProceed);
-      setMode({ kind: "thread", thread_id: res.thread_id });
-      // Optimistic: immediately fetch the new turn
+  const onTurnUpdated = useCallback((t: TurnSnap) => {
+    setCurrentTurn(t);
+    // memoize palette per thread for the history covers
+    const palette = t.plan?.visual_brief?.palette as Record<string, string> | undefined;
+    if (t.thread_id && palette) {
+      const cols = Object.values(palette).filter(Boolean).slice(0, 6);
+      if (cols.length) setPlanSwatches((p) => ({ ...p, [t.thread_id]: cols as string[] }));
+    }
+  }, []);
+
+  const startSession = useCallback(
+    async (goal: string, fileIds: string[]) => {
+      const res = await api.createThread(goal, fileIds, true);
+      setMode({ kind: "session", thread_id: res.thread_id });
       try {
         const t = await api.getTurn(res.turn_id);
-        setTurns([t]);
+        setCurrentTurn(t);
       } catch {}
       refreshThreads();
     },
     [refreshThreads],
   );
 
-  const addTurnToCurrent = useCallback(
-    async (goal: string, fileIds: string[], autoProceed: boolean) => {
-      if (mode.kind !== "thread") return;
-      const last = turns[turns.length - 1];
-      const res = await api.addTurn(
-        mode.thread_id,
-        goal,
-        fileIds,
-        autoProceed,
-        last?.id ?? null,
-      );
+  const followUp = useCallback(
+    async (goal: string, fileIds: string[]) => {
+      if (mode.kind !== "session") return;
+      const last = currentTurn;
+      const res = await api.addTurn(mode.thread_id, goal, fileIds, true, last?.id ?? null);
       try {
         const t = await api.getTurn(res.turn_id);
-        setTurns((prev) => prev.concat(t));
+        setCurrentTurn(t);
       } catch {}
     },
-    [mode, turns],
+    [mode, currentTurn],
   );
 
+  const pickThread = useCallback((id: string) => {
+    setHistoryOpen(false);
+    setMode({ kind: "session", thread_id: id });
+  }, []);
+
+  const newSession = useCallback(() => {
+    setHistoryOpen(false);
+    setMode({ kind: "landing" });
+    setCurrentTurn(null);
+  }, []);
+
+  const onStage = mode.kind === "session" && currentTurn != null;
+  const [idle, setIdle] = useState(false);
+
+  // mouse-idle detection (only matters on stage)
+  useEffect(() => {
+    if (!onStage) {
+      setIdle(false);
+      return;
+    }
+    let t: number | undefined;
+    const wake = () => {
+      setIdle(false);
+      if (t) window.clearTimeout(t);
+      t = window.setTimeout(() => setIdle(true), 3500);
+    };
+    wake();
+    window.addEventListener("mousemove", wake);
+    window.addEventListener("keydown", wake);
+    return () => {
+      window.removeEventListener("mousemove", wake);
+      window.removeEventListener("keydown", wake);
+      if (t) window.clearTimeout(t);
+    };
+  }, [onStage]);
+
+  // palette sync: paint shell with active visual_brief
+  useEffect(() => {
+    const root = document.documentElement;
+    const palette = currentTurn?.plan?.visual_brief?.palette as Record<string, string> | undefined;
+    if (palette) {
+      const bg = palette.bg || palette.background || "";
+      const ink = palette.ink || palette.fg || "";
+      const accent = palette.accent || "";
+      if (bg) root.style.setProperty("--task-bg", bg);
+      else root.style.removeProperty("--task-bg");
+      if (ink) root.style.setProperty("--task-ink", ink);
+      else root.style.removeProperty("--task-ink");
+      if (accent) root.style.setProperty("--task-accent", accent);
+      else root.style.removeProperty("--task-accent");
+    } else {
+      root.style.removeProperty("--task-bg");
+      root.style.removeProperty("--task-ink");
+      root.style.removeProperty("--task-accent");
+    }
+  }, [currentTurn?.id, currentTurn?.plan?.visual_brief]);
+
   return (
-    <div className="app">
-      <TopBar
-        threadId={mode.kind === "thread" ? mode.thread_id : null}
-        threads={threads}
-        onPick={(tid) => setMode({ kind: "thread", thread_id: tid })}
-        onNewThread={() => {
-          setMode({ kind: "landing" });
-          setTurns([]);
-        }}
+    <div
+      className={`app ${onStage ? "stage" : ""} ${onStage && idle ? "idle" : ""}`}
+      onMouseMove={() => {
+        if (idle) setIdle(false);
+      }}
+    >
+      <Sigil />
+      <Corner
+        onHistory={() => setHistoryOpen(true)}
+        onNew={newSession}
+        canNew={mode.kind === "session"}
       />
 
-      {mode.kind === "landing" ? (
-        <Landing onSubmit={startFromLanding} />
-      ) : (
-        <ThreadWorkspace
-          turns={turns}
+      {mode.kind === "landing" && <Landing onSubmit={startSession} />}
+
+      {mode.kind === "session" && currentTurn && (
+        <Stage
+          turn={currentTurn}
           tools={tools}
+          inspectorOpen={inspectorOpen}
+          onToggleInspector={() => setInspectorOpen((v) => !v)}
           onApprovalRequest={onApprovalRequest}
           onTurnUpdated={onTurnUpdated}
-          onAddTurn={addTurnToCurrent}
+          onFollowUp={followUp}
           registerBridge={registerBridge}
+        />
+      )}
+
+      {historyOpen && (
+        <History
+          threads={threads}
+          currentThreadId={mode.kind === "session" ? mode.thread_id : null}
+          swatches={planSwatches}
+          onPick={pickThread}
+          onNew={newSession}
+          onClose={() => setHistoryOpen(false)}
         />
       )}
 
@@ -164,77 +282,68 @@ export function App() {
 }
 
 
-function TopBar(props: {
-  threadId: string | null;
-  threads: ThreadSummary[];
-  onPick: (id: string) => void;
-  onNewThread: () => void;
-}) {
-  const [open, setOpen] = useState(false);
+/* -------------------------------------------------------------------- */
+/* Corner chrome                                                         */
+/* -------------------------------------------------------------------- */
+
+function Sigil() {
   return (
-    <header className="topbar">
-      <div className="brand">
-        <svg className="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
-          <defs>
-            <linearGradient id="bm-1" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%"   stopColor="#7C5CFF"/>
-              <stop offset="100%" stopColor="#FF8A5C"/>
-            </linearGradient>
-            <linearGradient id="bm-2" x1="0" y1="1" x2="1" y2="0">
-              <stop offset="0%"   stopColor="#5BD2A2"/>
-              <stop offset="100%" stopColor="#7C5CFF"/>
-            </linearGradient>
-          </defs>
-          <circle cx="32" cy="32" r="26" stroke="url(#bm-2)" strokeWidth="2" strokeDasharray="4 3" opacity=".55" fill="none"/>
-          <rect x="14" y="14" width="36" height="36" rx="9" stroke="url(#bm-1)" strokeWidth="2.4" fill="none"/>
-          <path d="M 32 21 L 45 43 L 19 43 Z" stroke="#FF8A5C" strokeWidth="2.4" strokeLinejoin="round" fill="none"/>
-        </svg>
-        <span className="brand-name">Morphic</span>
-        <span className="brand-sub">the interface takes the shape of the task</span>
-      </div>
-      <div className="top-right">
-        <div className="threads-menu">
-          <button className="ghost" onClick={() => setOpen((v) => !v)}>
-            {props.threads.length > 0 ? `Threads · ${props.threads.length}` : "Threads"}
-          </button>
-          {open && (
-            <div className="threads-popover" onMouseLeave={() => setOpen(false)}>
-              {props.threads.length === 0 && (
-                <div className="dim small">No threads yet.</div>
-              )}
-              {props.threads.map((t) => (
-                <button
-                  key={t.id}
-                  className={`thread-row ${t.id === props.threadId ? "current" : ""}`}
-                  onClick={() => {
-                    setOpen(false);
-                    props.onPick(t.id);
-                  }}
-                >
-                  <span className="thread-title">{t.title || "(untitled)"}</span>
-                  <span className="thread-meta">{t.turn_count} · {fmtAgo(t.created_at)}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        <button className="primary small" onClick={props.onNewThread}>
+    <div className="sigil">
+      <div className="sigil-mark" />
+      <span className="sigil-name">
+        <b>HUXForm</b> — the interface takes the shape of the task
+      </span>
+    </div>
+  );
+}
+
+function Corner(props: {
+  onHistory: () => void;
+  onNew: () => void;
+  canNew: boolean;
+}) {
+  return (
+    <div className="corner">
+      <button className="corner-btn" onClick={props.onHistory}>
+        Sessions <span className="kbd">\</span>
+      </button>
+      {props.canNew && (
+        <button className="corner-btn" onClick={props.onNew}>
           New
         </button>
-      </div>
-    </header>
+      )}
+    </div>
   );
 }
 
 
+/* -------------------------------------------------------------------- */
+/* Landing                                                               */
+/* -------------------------------------------------------------------- */
+
 function Landing(props: {
-  onSubmit: (goal: string, fileIds: string[], autoProceed: boolean) => Promise<void>;
+  onSubmit: (goal: string, fileIds: string[]) => Promise<void>;
 }) {
   const [goal, setGoal] = useState("");
   const [files, setFiles] = useState<FileRec[]>([]);
-  const [autoProceed, setAutoProceed] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [hintIdx, setHintIdx] = useState(() => Math.floor(Math.random() * HINTS.length));
+  const [verbIdx, setVerbIdx] = useState(0);
+
+  useEffect(() => {
+    const h = window.setInterval(() => {
+      setHintIdx((i) => (i + 1) % HINTS.length);
+    }, 5200);
+    return () => clearInterval(h);
+  }, []);
+
+  useEffect(() => {
+    const h = window.setInterval(() => {
+      setVerbIdx((i) => (i + 1) % HERO_VERBS.length);
+    }, 2800);
+    return () => clearInterval(h);
+  }, []);
 
   const onPickFiles = async (list: FileList | null) => {
     if (!list) return;
@@ -255,224 +364,162 @@ function Landing(props: {
     setBusy(true);
     setErr(null);
     try {
-      await props.onSubmit(text, files.map((f) => f.id), autoProceed);
+      await props.onSubmit(text, files.map((f) => f.id));
     } catch (e: any) {
       setErr(e?.message ?? String(e));
-    } finally {
       setBusy(false);
     }
   };
 
   return (
-    <div className="landing">
+    <section className="landing">
       <div className="landing-inner">
-        <h1>Опиши задачу — Morphic придумает интерфейс под неё.</h1>
-        <p className="lede">
-          Не чат. Не дашборд-конструктор. Каждый раз — уникальный мини-app
-          под конкретную задачу, в безопасном sandbox. Можно прикрепить файлы.
+        <div className="landing-eyebrow">
+          <span>Generative human-experience runtime</span>
+        </div>
+
+        <h1 className="landing-h">
+          What should the&nbsp;
+          <em>interface</em>
+          &nbsp;
+          <span key={verbIdx} className="hero-verb">
+            {HERO_VERBS[verbIdx]}
+          </span>
+          &nbsp;today?
+        </h1>
+
+        <p className="landing-sub">
+          Describe a task in one line. HUXForm designs a one-off mini-app for it —
+          its own metaphor, palette, tempo. Not a chat. Not a dashboard kit.
+          One interface, one task.
         </p>
 
-        <textarea
-          autoFocus
-          value={goal}
-          onChange={(e) => setGoal(e.target.value)}
-          onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onSubmit();
-          }}
-          placeholder="Например: проверь этот CSV на дубли, или подбери блогеров для FasonAI…"
-          rows={5}
-        />
-
-        {files.length > 0 && (
-          <div className="composer-files">
-            {files.map((f) => (
-              <span key={f.id} className="file-pill">
-                <span className="file-name">{f.name}</span>
-                <span className="file-size">{fmtBytes(f.size)}</span>
-                <button
-                  className="file-x"
-                  onClick={() =>
-                    setFiles((prev) => prev.filter((x) => x.id !== f.id))
-                  }
-                  aria-label="remove"
-                >×</button>
-              </span>
-            ))}
-          </div>
-        )}
-
-        <div className="landing-actions">
-          <label className="ghost file-btn">
-            <input
-              type="file"
-              multiple
-              onChange={(e) => {
-                onPickFiles(e.target.files);
-                e.currentTarget.value = "";
-              }}
-            />
-            Attach
-          </label>
-
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={autoProceed}
-              onChange={(e) => setAutoProceed(e.target.checked)}
-            />
-            <span>Auto-proceed past plan</span>
-          </label>
-
-          <span className="spacer" />
-
-          <button
-            className="primary"
-            disabled={!goal.trim() || busy}
-            onClick={onSubmit}
-          >
-            {busy ? "Запускаю…" : "Generate experience  ⌘↵"}
-          </button>
-        </div>
-
-        {err && <div className="err">{err}</div>}
-
-        <div className="examples">
-          {EXAMPLES.map((e) => (
-            <button key={e} className="chip" onClick={() => setGoal(e)}>
-              {e}
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-
-function ThreadWorkspace(props: {
-  turns: TurnSnap[];
-  tools: Array<{ name: string; title: string; description: string; risk: string; source: string; requires_approval: boolean }>;
-  onApprovalRequest: (req: ApprovalRequest) => void;
-  onTurnUpdated: (t: TurnSnap) => void;
-  onAddTurn: (goal: string, fileIds: string[], autoProceed: boolean) => Promise<void>;
-  registerBridge: (id: string, bridge: Bridge | null) => void;
-}) {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [props.turns.length]);
-
-  return (
-    <main className="workspace">
-      <div className="thread-scroll" ref={scrollRef}>
-        {props.turns.map((t, i) => (
-          <TurnView
-            key={t.id}
-            turn={t}
-            isLast={i === props.turns.length - 1}
-            tools={props.tools}
-            onApprovalRequest={props.onApprovalRequest}
-            onTurnUpdated={props.onTurnUpdated}
-            registerBridge={props.registerBridge}
-          />
-        ))}
-      </div>
-      <Composer onSend={props.onAddTurn} />
-    </main>
-  );
-}
-
-
-function Composer(props: {
-  onSend: (goal: string, fileIds: string[], autoProceed: boolean) => Promise<void>;
-}) {
-  const [text, setText] = useState("");
-  const [files, setFiles] = useState<FileRec[]>([]);
-  const [autoProceed, setAutoProceed] = useState(true);
-  const [busy, setBusy] = useState(false);
-
-  const onSend = async () => {
-    if (!text.trim() || busy) return;
-    setBusy(true);
-    try {
-      await props.onSend(text.trim(), files.map((f) => f.id), autoProceed);
-      setText("");
-      setFiles([]);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="composer">
-      <div className="composer-row">
-        <label className="ghost file-btn small">
-          <input
-            type="file"
-            multiple
-            onChange={async (e) => {
-              const list = e.currentTarget.files;
-              e.currentTarget.value = "";
-              if (!list) return;
-              for (const f of Array.from(list)) {
-                try {
-                  const rec = await api.uploadFile(f);
-                  setFiles((p) => p.concat(rec));
-                } catch {}
+        <div className="prompt-slab">
+          <textarea
+            autoFocus
+            value={goal}
+            onChange={(e) => setGoal(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !busy) {
+                e.preventDefault();
+                onSubmit();
               }
             }}
+            placeholder="A task. Any shape, any domain."
+            rows={2}
           />
-          📎
-        </label>
-        <input
-          type="text"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onSend();
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              onSend();
-            }
-          }}
-          placeholder="Refine, add a follow-up, or start a related task…"
-        />
-        <label className="check small">
-          <input
-            type="checkbox"
-            checked={autoProceed}
-            onChange={(e) => setAutoProceed(e.target.checked)}
-          />
-          <span>auto</span>
-        </label>
-        <button
-          className="primary small"
-          disabled={!text.trim() || busy}
-          onClick={onSend}
-        >
-          {busy ? "…" : "Send"}
-        </button>
-      </div>
-      {files.length > 0 && (
-        <div className="composer-files">
-          {files.map((f) => (
-            <span key={f.id} className="file-pill">
-              <span className="file-name">{f.name}</span>
-              <span className="file-size">{fmtBytes(f.size)}</span>
-              <button
-                className="file-x"
-                onClick={() => setFiles((p) => p.filter((x) => x.id !== f.id))}
-              >×</button>
-            </span>
-          ))}
+
+          <div className="prompt-meta">
+            <label className="prompt-attach">
+              <input
+                type="file"
+                multiple
+                onChange={(e) => {
+                  onPickFiles(e.currentTarget.files);
+                  e.currentTarget.value = "";
+                }}
+              />
+              {files.length === 0 ? "Attach" : `Attach · ${files.length}`}
+            </label>
+
+            {files.length > 0 && (
+              <div className="prompt-attach-list">
+                {files.map((f) => (
+                  <span key={f.id} className="attached-pill">
+                    <span>{f.name}</span>
+                    <button
+                      onClick={() =>
+                        setFiles((prev) => prev.filter((x) => x.id !== f.id))
+                      }
+                      aria-label="remove"
+                    >×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <span className="prompt-spacer" />
+
+            <button
+              className="prompt-key"
+              disabled={!goal.trim() || busy}
+              onClick={onSubmit}
+            >
+              {busy ? "summoning" : <>begin <b>↵</b></>}
+            </button>
+          </div>
         </div>
-      )}
+
+        <div className="landing-cue">
+          try <em>{HINTS[hintIdx]}</em>
+        </div>
+
+        {err && <div className="landing-err">{err}</div>}
+      </div>
+    </section>
+  );
+}
+
+
+/* -------------------------------------------------------------------- */
+/* History overlay                                                       */
+/* -------------------------------------------------------------------- */
+
+function History(props: {
+  threads: ThreadSummary[];
+  currentThreadId: string | null;
+  swatches: Record<string, string[]>;
+  onPick: (id: string) => void;
+  onNew: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="history" onClick={props.onClose}>
+      <div className="history-h" onClick={(e) => e.stopPropagation()}>
+        <h2>Past sessions</h2>
+        <div style={{ display: "flex", gap: 14, alignItems: "baseline" }}>
+          <button className="corner-btn" onClick={props.onNew}>
+            New session
+          </button>
+          <span className="esc">esc · close</span>
+        </div>
+      </div>
+      <div className="history-grid" onClick={(e) => e.stopPropagation()}>
+        {props.threads.length === 0 && (
+          <div className="history-empty">No sessions yet.</div>
+        )}
+        {props.threads.map((t) => {
+          const cols = props.swatches[t.id] || defaultSwatch();
+          return (
+            <button
+              key={t.id}
+              className={`session-card ${
+                t.id === props.currentThreadId ? "current" : ""
+              }`}
+              onClick={() => props.onPick(t.id)}
+            >
+              <div className="swatches">
+                {cols.slice(0, 6).map((c, i) => (
+                  <span key={i} style={{ background: c }} />
+                ))}
+              </div>
+              <div className="session-card-title">{t.title || "untitled"}</div>
+              <div className="session-card-meta">
+                <span>{t.turn_count} turn{t.turn_count === 1 ? "" : "s"}</span>
+                <span>{fmtAgo(t.created_at)}</span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
+
+/* -------------------------------------------------------------------- */
+/* Approval modal                                                        */
+/* -------------------------------------------------------------------- */
 
 function ApprovalOverlay(props: {
   requests: ApprovalRequest[];
@@ -480,7 +527,7 @@ function ApprovalOverlay(props: {
 }) {
   const req = props.requests[0];
   return (
-    <div className="overlay">
+    <div className="approval-overlay">
       <div className="approval-card">
         <div className="approval-h">Approval required</div>
         <div className="approval-label">{req.label}</div>
@@ -490,9 +537,7 @@ function ApprovalOverlay(props: {
           </pre>
         ) : null}
         <div className="approval-actions">
-          <button className="ghost" onClick={() => props.onResolve(req, false)}>
-            Deny
-          </button>
+          <button onClick={() => props.onResolve(req, false)}>Deny</button>
           <button className="primary" onClick={() => props.onResolve(req, true)}>
             Approve
           </button>
@@ -503,16 +548,28 @@ function ApprovalOverlay(props: {
 }
 
 
+/* -------------------------------------------------------------------- */
+/* Utilities                                                             */
+/* -------------------------------------------------------------------- */
+
+function isTyping(target: EventTarget | null): boolean {
+  if (!target || !(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return (
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    target.isContentEditable === true
+  );
+}
+
+function defaultSwatch(): string[] {
+  return ["#1a1d24", "#2a2d36", "#3a3d46", "#4a4d56", "#5a5d66", "#6a6d76"];
+}
+
 function fmtAgo(ts: number): string {
   const sec = Math.max(0, Math.floor(Date.now() / 1000 - ts));
   if (sec < 60) return `${sec}s ago`;
   if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
   if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
   return `${Math.floor(sec / 86400)}d ago`;
-}
-
-function fmtBytes(n: number): string {
-  if (n < 1024) return `${n}B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
-  return `${(n / 1024 / 1024).toFixed(1)}MB`;
 }

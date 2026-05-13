@@ -1,7 +1,7 @@
 [project]
-name = "agui-api"
-version = "0.1.0"
-description = "AGUI — generative human experience runtime"
+name = "huxform-api"
+version = "0.3.0"
+description = "HUXForm — generative human-experience runtime. The interface takes the shape of the task."
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.110.0",

@@ -9,5 +9,23 @@ dist/
 .env.local
 .DS_Store
 *.tsbuildinfo
+.huxform-data/
 .agui-data/
 .agui/
+.omc/
+test-dupes.csv
+apps/web/test-dupes.csv
+.huxform-api.log
+.huxform-web.log
+*.log
+*.log.err
+
+# Local screenshots from dev runs
+apps/web/*.png
+apps/web/.playwright-cli/
+.playwright-cli/
+
+# Backend dev artifacts
+apps/api/.env
+apps/api/uvicorn.log
+apps/api/uvicorn.err

@@ -23,6 +23,17 @@ RUNTIME_STUB = """<script>(function(){
     if (ev && ev.type === 'state_patch' && ev.patch) {
       Object.assign(stateSnapshot, ev.patch);
     }
+    if (ev && ev.type === 'file_attached' && ev.file && window.agui) {
+      var files = window.agui.files || [];
+      var exists = false;
+      for (var j = 0; j < files.length; j++) {
+        if (files[j] && files[j].id === ev.file.id) { exists = true; break; }
+      }
+      if (!exists) {
+        files.push(ev.file);
+        window.agui.files = files;
+      }
+    }
     for (var i = 0; i < listeners.length; i++) {
       try { listeners[i](ev); } catch (err) {}
     }
@@ -48,6 +59,21 @@ RUNTIME_STUB = """<script>(function(){
       if (d.ok) p.resolve(d.result); else p.reject(new Error(d.error || 'tool error'));
     }
   });
+  function upload(file){
+    return new Promise(function(resolve, reject){
+      if (!file) { reject(new Error('uploadFile: no file')); return; }
+      var id = 'u' + (nextId++);
+      pending[id] = { resolve: resolve, reject: reject };
+      send({
+        kind: 'upload',
+        id: id,
+        file: file,
+        name: file.name || 'upload',
+        mime: file.type || 'application/octet-stream',
+        size: file.size || 0,
+      });
+    });
+  }
   window.agui = {
     plan: null, tools: [], goal: '', taskId: '', files: [],
     callTool: call,
@@ -56,6 +82,7 @@ RUNTIME_STUB = """<script>(function(){
     finalResult: function(value){ return call('task.final_result', { result: value }); },
     log: function(level, message){ return call('task.log', { level: level || 'info', message: String(message) }); },
     readFile: function(file_id){ return call('files.read', { file_id: file_id }); },
+    uploadFile: upload,
     onEvent: function(handler){
       listeners.push(handler);
       return function(){ var i = listeners.indexOf(handler); if (i>=0) listeners.splice(i,1); };
@@ -81,6 +108,67 @@ RUNTIME_STUB = """<script>(function(){
       setTimeout(function(){ t.remove(); }, 2700);
     },
   };
+  // Intercept fetch() to /api/* and reroute through the bridge.
+  // Generated UIs sometimes try fetch directly — the sandboxed iframe has
+  // no same-origin and would fail. We catch /api/files (FormData uploads),
+  // /api/turns/{tid}/files (attach), /api/turns/{tid}/tools/{name} (tool
+  // calls) and resolve them as if the UI had used agui.uploadFile /
+  // agui.callTool.
+  if (window.fetch) {
+    var __origFetch = window.fetch.bind(window);
+    window.fetch = function(input, init){
+      try {
+        var url = typeof input === 'string' ? input : (input && input.url) || '';
+        // Normalise so absolute, relative and Request inputs all match
+        var pathOnly = url;
+        var m1 = String(url).match(/^https?:\/\/[^\/]+(\/.*)$/i);
+        if (m1) pathOnly = m1[1];
+        if (typeof pathOnly === 'string' && pathOnly.indexOf('/api/') === 0) {
+          // Upload: /api/files
+          if (/^\/api\/files\/?$/.test(pathOnly) && init && init.method && init.method.toUpperCase() === 'POST') {
+            var body = init.body;
+            var file = null;
+            if (body && typeof body.get === 'function') file = body.get('file');
+            if (!file && body && body.append) {
+              try { body.entries(); } catch(_) {}
+            }
+            if (file) {
+              return upload(file).then(function(rec){
+                return new Response(JSON.stringify({ file: rec }), {
+                  status: 200,
+                  headers: { 'content-type': 'application/json' },
+                });
+              }).catch(function(err){
+                return new Response(JSON.stringify({ detail: String(err) }), {
+                  status: 500,
+                  headers: { 'content-type': 'application/json' },
+                });
+              });
+            }
+          }
+          // Tool call: /api/turns/{tid}/tools/{name}
+          var m = pathOnly.match(/^\/api\/turns\/[^\/]+\/tools\/(.+)$/);
+          if (m && init && init.method && init.method.toUpperCase() === 'POST') {
+            var params = {};
+            try { params = JSON.parse(init.body || '{}'); } catch(_){}
+            return call(m[1], params).then(function(result){
+              return new Response(JSON.stringify({ result: result }), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+              });
+            }).catch(function(err){
+              return new Response(JSON.stringify({ detail: String(err) }), {
+                status: 500,
+                headers: { 'content-type': 'application/json' },
+              });
+            });
+          }
+        }
+      } catch (e) {}
+      return __origFetch(input, init);
+    };
+  }
+
   send({ kind:'ready' });
 })();</script>"""
 
