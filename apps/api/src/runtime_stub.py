@@ -1,8 +1,8 @@
 """The window.agui runtime stub injected into every generated document.
 
-The generated UI is sandboxed (allow-scripts, NOT allow-same-origin), so
-this stub talks to the parent frame purely via postMessage. The parent
-(apps/web bridge.ts) routes those messages to the AGUI backend.
+The iframe runs with sandbox="allow-scripts" (NO same-origin). Everything
+flows through postMessage to the parent shell, which proxies tool calls
+and event subscription to the AGUI backend.
 """
 
 RUNTIME_STUB = """<script>(function(){
@@ -19,6 +19,14 @@ RUNTIME_STUB = """<script>(function(){
       send({ kind:'call', id: id, name: name, params: params || {} });
     });
   }
+  function fanout(ev){
+    if (ev && ev.type === 'state_patch' && ev.patch) {
+      Object.assign(stateSnapshot, ev.patch);
+    }
+    for (var i = 0; i < listeners.length; i++) {
+      try { listeners[i](ev); } catch (err) {}
+    }
+  }
   window.addEventListener('message', function(e){
     var d = e.data;
     if (!d || !d.__agui) return;
@@ -27,25 +35,12 @@ RUNTIME_STUB = """<script>(function(){
       window.agui.tools = d.tools || [];
       window.agui.goal = d.goal || '';
       window.agui.taskId = d.taskId || '';
+      window.agui.files = d.files || [];
       var hist = d.history || [];
-      for (var i = 0; i < hist.length; i++) {
-        var ev = hist[i];
-        if (ev && ev.type === 'state_patch' && ev.patch) {
-          Object.assign(stateSnapshot, ev.patch);
-        }
-        for (var j = 0; j < listeners.length; j++) {
-          try { listeners[j](ev); } catch (err) {}
-        }
-      }
+      for (var i = 0; i < hist.length; i++) fanout(hist[i]);
       window.dispatchEvent(new CustomEvent('agui:boot', { detail: d }));
     } else if (d.kind === 'event') {
-      var ev2 = d.event;
-      if (ev2 && ev2.type === 'state_patch' && ev2.patch) {
-        Object.assign(stateSnapshot, ev2.patch);
-      }
-      for (var k = 0; k < listeners.length; k++) {
-        try { listeners[k](ev2); } catch (err) {}
-      }
+      fanout(d.event);
     } else if (d.kind === 'response') {
       var p = pending[d.id];
       if (!p) return;
@@ -54,12 +49,13 @@ RUNTIME_STUB = """<script>(function(){
     }
   });
   window.agui = {
-    plan: null, tools: [], goal: '', taskId: '',
+    plan: null, tools: [], goal: '', taskId: '', files: [],
     callTool: call,
     setState: function(patch){ return call('task.set_state', { patch: patch }); },
     getState: function(){ return Object.assign({}, stateSnapshot); },
     finalResult: function(value){ return call('task.final_result', { result: value }); },
     log: function(level, message){ return call('task.log', { level: level || 'info', message: String(message) }); },
+    readFile: function(file_id){ return call('files.read', { file_id: file_id }); },
     onEvent: function(handler){
       listeners.push(handler);
       return function(){ var i = listeners.indexOf(handler); if (i>=0) listeners.splice(i,1); };
@@ -67,7 +63,10 @@ RUNTIME_STUB = """<script>(function(){
     askApproval: function(label, details){
       return new Promise(function(resolve){
         var id = 'a' + (nextId++);
-        pending[id] = { resolve: function(r){ resolve(!!(r && r.approved)); }, reject: function(){ resolve(false); } };
+        pending[id] = {
+          resolve: function(r){ resolve(!!(r && r.approved)); },
+          reject: function(){ resolve(false); }
+        };
         send({ kind:'approval', id: id, label: String(label||''), details: details||null });
       });
     },
@@ -87,7 +86,6 @@ RUNTIME_STUB = """<script>(function(){
 
 
 def inject_runtime(html: str) -> str:
-    """Insert the runtime stub right after <head>, or fall back to prepend."""
     if not html:
         return RUNTIME_STUB
     lower = html.lower()
@@ -95,12 +93,11 @@ def inject_runtime(html: str) -> str:
     if idx != -1:
         cut = idx + len("<head>")
         return html[:cut] + "\n" + RUNTIME_STUB + html[cut:]
-    idx = lower.find("<head ")  # <head attr=...>
+    idx = lower.find("<head ")
     if idx != -1:
         end = html.find(">", idx)
         if end != -1:
             return html[: end + 1] + "\n" + RUNTIME_STUB + html[end + 1 :]
-    # No <head> tag — inject before <body> or at the top
     idx = lower.find("<body")
     if idx != -1:
         return html[:idx] + RUNTIME_STUB + html[idx:]

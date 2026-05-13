@@ -1,276 +1,330 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
-import { ApprovalRequest, Bridge, TaskEvent } from "./bridge";
+import { api, FileRec, ThreadSummary, Turn as TurnSnap } from "./api";
+import { ApprovalRequest, Bridge } from "./bridge";
+import { TurnView } from "./Turn";
 
-type TaskPlan = {
-  task_type: string;
-  presentation_mode: string;
-  visual_concept: string;
-  rationale: string;
-  steps: string[];
-  tool_hints: string[];
-  needs_user_input: boolean;
-};
-
-type TaskSnapshot = {
-  id: string;
-  goal: string;
-  status: string;
-  plan: TaskPlan | null;
-  state: Record<string, unknown>;
-  final_result: unknown;
-  error: string | null;
-  has_ui: boolean;
-};
-
-type Tool = {
-  name: string;
-  title: string;
-  description: string;
-  risk: string;
-  requires_approval: boolean;
-  params: Record<string, unknown>;
-};
+type Mode =
+  | { kind: "landing" }
+  | { kind: "thread"; thread_id: string };
 
 const EXAMPLES = [
-  "Проверь этот CSV на дубли (я его сейчас загружу).",
-  "Найди 10 Instagram-блогеров для рекламы FasonAI, бюджет 5-10к ₽.",
+  "Проверь этот CSV на дубли (я его сейчас прикреплю).",
+  "Найди 10 Instagram-блогеров для рекламы FasonAI, бюджет 5–10к ₽.",
   "Подготовь маркетинговый аудит лендинга example.com.",
-  "Сравни 3 платёжные системы для SaaS из РФ.",
+  "Сравни 3 платёжные системы для российского SaaS.",
   "Объясни, что такое MCP, в трёх абзацах.",
 ];
 
 export function App() {
-  const [goal, setGoal] = useState("");
-  const [taskId, setTaskId] = useState<string | null>(null);
-  const [snapshot, setSnapshot] = useState<TaskSnapshot | null>(null);
-  const [events, setEvents] = useState<TaskEvent[]>([]);
-  const [tools, setTools] = useState<Tool[]>([]);
-  const [iframeReady, setIframeReady] = useState(false);
+  const [mode, setMode] = useState<Mode>({ kind: "landing" });
+  const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  const [turns, setTurns] = useState<TurnSnap[]>([]);
+  const [tools, setTools] = useState<
+    Array<{ name: string; title: string; description: string; risk: string; source: string; requires_approval: boolean }>
+  >([]);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const bridgesByTurn = useRef<Map<string, Bridge>>(new Map());
 
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const bridgeRef = useRef<Bridge | null>(null);
-  const reloadTimer = useRef<number | null>(null);
-
-  // Fetch tool list once for the boot payload
-  useEffect(() => {
-    fetch("/api/tools")
-      .then((r) => r.json())
-      .then((d) => setTools(d.tools || []))
-      .catch(() => setTools([]));
+  const registerBridge = useCallback((id: string, bridge: Bridge | null) => {
+    if (bridge) bridgesByTurn.current.set(id, bridge);
+    else bridgesByTurn.current.delete(id);
   }, []);
 
-  // Poll snapshot until UI is ready, then stop
+  // Tools registry (display only)
   useEffect(() => {
-    if (!taskId) return;
+    api.tools().then((d) => setTools(d.tools as any)).catch(() => {});
+  }, []);
+
+  // Threads list
+  const refreshThreads = useCallback(async () => {
+    try {
+      const d = await api.listThreads();
+      setThreads(d.threads);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    refreshThreads();
+  }, [refreshThreads]);
+
+  // Load a thread's turns when entering it
+  useEffect(() => {
+    if (mode.kind !== "thread") return;
     let cancelled = false;
-    const tick = async () => {
-      try {
-        const r = await fetch(`/api/tasks/${taskId}`);
-        const d: TaskSnapshot = await r.json();
+    api
+      .getThread(mode.thread_id)
+      .then((t) => {
         if (cancelled) return;
-        setSnapshot(d);
-        if (d.has_ui && !iframeReady) {
-          // Force the iframe to load now that HTML is available
-          const f = iframeRef.current;
-          if (f) f.src = `/api/tasks/${taskId}/ui?t=${Date.now()}`;
-          setIframeReady(true);
-        }
-      } catch {
-        // ignore
-      }
-    };
-    tick();
-    const handle = window.setInterval(tick, 1200);
+        setTurns(t.turns);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
-      clearInterval(handle);
     };
-  }, [taskId, iframeReady]);
+  }, [mode]);
 
-  // Set up bridge when iframe is rendered
+  // Periodically refresh threads list to update titles
   useEffect(() => {
-    if (!taskId) return;
-    const iframe = iframeRef.current;
-    if (!iframe) return;
-    const bridge = new Bridge({
-      iframe,
-      taskId,
-      onEvent: (ev) => {
-        setEvents((prev) => {
-          const next = prev.concat(ev);
-          return next.length > 400 ? next.slice(-400) : next;
-        });
-      },
-      onApprovalRequest: (req) => {
-        setApprovals((prev) => prev.concat(req));
-      },
-    });
-    bridge.attachEventStream();
-    bridgeRef.current = bridge;
-    return () => {
-      bridge.destroy();
-      bridgeRef.current = null;
-    };
-  }, [taskId]);
+    const h = window.setInterval(refreshThreads, 5000);
+    return () => clearInterval(h);
+  }, [refreshThreads]);
 
-  // Re-send boot payload whenever the plan/tools change (so the iframe boots correctly after reload)
-  useEffect(() => {
-    if (!bridgeRef.current || !snapshot?.plan) return;
-    bridgeRef.current.setBootPayload({
-      plan: snapshot.plan,
-      tools,
-      goal: snapshot.goal,
-    });
-  }, [snapshot?.plan, tools, snapshot?.goal]);
-
-  const onSubmit = useCallback(async () => {
-    const text = goal.trim();
-    if (!text || submitting) return;
-    setSubmitting(true);
-    setError(null);
-    setEvents([]);
-    setApprovals([]);
-    setIframeReady(false);
-    setSnapshot(null);
-    setTaskId(null);
-    try {
-      const r = await fetch("/api/tasks", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ goal: text }),
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const d = await r.json();
-      setTaskId(d.task_id);
-    } catch (e: any) {
-      setError(e?.message ?? String(e));
-    } finally {
-      setSubmitting(false);
-    }
-  }, [goal, submitting]);
-
-  const reset = useCallback(() => {
-    if (reloadTimer.current) window.clearTimeout(reloadTimer.current);
-    setTaskId(null);
-    setSnapshot(null);
-    setEvents([]);
-    setApprovals([]);
-    setIframeReady(false);
-    setError(null);
+  const onTurnUpdated = useCallback((t: TurnSnap) => {
+    setTurns((prev) => prev.map((x) => (x.id === t.id ? t : x)));
   }, []);
 
-  const resolveApproval = useCallback((req: ApprovalRequest, ok: boolean) => {
-    setApprovals((prev) => prev.filter((a) => a.id !== req.id));
-    if (req.source === "backend" && req.approvalId) {
-      bridgeRef.current?.resolveBackendApproval(req.approvalId, ok);
-    } else {
-      bridgeRef.current?.resolveIframeApproval(req.id, ok);
-    }
+  const onApprovalRequest = useCallback((req: ApprovalRequest) => {
+    setApprovals((prev) => {
+      if (prev.find((p) => p.id === req.id && p.turnId === req.turnId)) return prev;
+      return prev.concat(req);
+    });
   }, []);
 
-  const status = snapshot?.status ?? (taskId ? "starting" : "idle");
-  const plan = snapshot?.plan ?? null;
+  const resolveApproval = useCallback(
+    (req: ApprovalRequest, ok: boolean) => {
+      setApprovals((prev) =>
+        prev.filter((a) => !(a.id === req.id && a.turnId === req.turnId)),
+      );
+      if (req.source === "backend" && req.approvalId) {
+        api.approve(req.turnId, req.approvalId, ok).catch(() => {});
+      } else {
+        bridgesByTurn.current.get(req.turnId)?.resolveIframeApproval(req.id, ok);
+      }
+    },
+    [],
+  );
+
+  const startFromLanding = useCallback(
+    async (goal: string, fileIds: string[], autoProceed: boolean) => {
+      const res = await api.createThread(goal, fileIds, autoProceed);
+      setMode({ kind: "thread", thread_id: res.thread_id });
+      // Optimistic: immediately fetch the new turn
+      try {
+        const t = await api.getTurn(res.turn_id);
+        setTurns([t]);
+      } catch {}
+      refreshThreads();
+    },
+    [refreshThreads],
+  );
+
+  const addTurnToCurrent = useCallback(
+    async (goal: string, fileIds: string[], autoProceed: boolean) => {
+      if (mode.kind !== "thread") return;
+      const last = turns[turns.length - 1];
+      const res = await api.addTurn(
+        mode.thread_id,
+        goal,
+        fileIds,
+        autoProceed,
+        last?.id ?? null,
+      );
+      try {
+        const t = await api.getTurn(res.turn_id);
+        setTurns((prev) => prev.concat(t));
+      } catch {}
+    },
+    [mode, turns],
+  );
 
   return (
     <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <span className="dot" />
-          <span className="brand-name">AGUI</span>
-          <span className="brand-sub">generative human-experience runtime</span>
-        </div>
-        {taskId && (
-          <button className="ghost" onClick={reset}>
-            New task
-          </button>
-        )}
-      </header>
+      <TopBar
+        threadId={mode.kind === "thread" ? mode.thread_id : null}
+        threads={threads}
+        onPick={(tid) => setMode({ kind: "thread", thread_id: tid })}
+        onNewThread={() => {
+          setMode({ kind: "landing" });
+          setTurns([]);
+        }}
+      />
 
-      {!taskId && (
-        <Landing
-          goal={goal}
-          setGoal={setGoal}
-          onSubmit={onSubmit}
-          submitting={submitting}
-          error={error}
+      {mode.kind === "landing" ? (
+        <Landing onSubmit={startFromLanding} />
+      ) : (
+        <ThreadWorkspace
+          turns={turns}
+          tools={tools}
+          onApprovalRequest={onApprovalRequest}
+          onTurnUpdated={onTurnUpdated}
+          onAddTurn={addTurnToCurrent}
+          registerBridge={registerBridge}
         />
-      )}
-
-      {taskId && (
-        <main className="workspace">
-          <aside className="sidebar">
-            <PlanPanel status={status} plan={plan} snapshot={snapshot} />
-            <EventsPanel events={events} />
-          </aside>
-          <section className="stage">
-            <iframe
-              ref={iframeRef}
-              className="stage-frame"
-              title="AGUI experience"
-              sandbox="allow-scripts allow-forms allow-pointer-lock allow-popups"
-              src="about:blank"
-            />
-          </section>
-        </main>
       )}
 
       {approvals.length > 0 && (
-        <ApprovalOverlay
-          requests={approvals}
-          onResolve={resolveApproval}
-        />
+        <ApprovalOverlay requests={approvals} onResolve={resolveApproval} />
       )}
     </div>
   );
 }
 
-function Landing(props: {
-  goal: string;
-  setGoal: (v: string) => void;
-  onSubmit: () => void;
-  submitting: boolean;
-  error: string | null;
+
+function TopBar(props: {
+  threadId: string | null;
+  threads: ThreadSummary[];
+  onPick: (id: string) => void;
+  onNewThread: () => void;
 }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <header className="topbar">
+      <div className="brand">
+        <span className="dot" />
+        <span className="brand-name">AGUI</span>
+        <span className="brand-sub">generative human-experience runtime</span>
+      </div>
+      <div className="top-right">
+        <div className="threads-menu">
+          <button className="ghost" onClick={() => setOpen((v) => !v)}>
+            {props.threads.length > 0 ? `Threads · ${props.threads.length}` : "Threads"}
+          </button>
+          {open && (
+            <div className="threads-popover" onMouseLeave={() => setOpen(false)}>
+              {props.threads.length === 0 && (
+                <div className="dim small">No threads yet.</div>
+              )}
+              {props.threads.map((t) => (
+                <button
+                  key={t.id}
+                  className={`thread-row ${t.id === props.threadId ? "current" : ""}`}
+                  onClick={() => {
+                    setOpen(false);
+                    props.onPick(t.id);
+                  }}
+                >
+                  <span className="thread-title">{t.title || "(untitled)"}</span>
+                  <span className="thread-meta">{t.turn_count} · {fmtAgo(t.created_at)}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <button className="primary small" onClick={props.onNewThread}>
+          New
+        </button>
+      </div>
+    </header>
+  );
+}
+
+
+function Landing(props: {
+  onSubmit: (goal: string, fileIds: string[], autoProceed: boolean) => Promise<void>;
+}) {
+  const [goal, setGoal] = useState("");
+  const [files, setFiles] = useState<FileRec[]>([]);
+  const [autoProceed, setAutoProceed] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const onPickFiles = async (list: FileList | null) => {
+    if (!list) return;
+    setErr(null);
+    for (const f of Array.from(list)) {
+      try {
+        const rec = await api.uploadFile(f);
+        setFiles((prev) => prev.concat(rec));
+      } catch (e: any) {
+        setErr(e?.message ?? String(e));
+      }
+    }
+  };
+
+  const onSubmit = async () => {
+    const text = goal.trim();
+    if (!text || busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await props.onSubmit(text, files.map((f) => f.id), autoProceed);
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="landing">
       <div className="landing-inner">
         <h1>Опиши задачу — AGUI придумает интерфейс под неё.</h1>
         <p className="lede">
-          Не чат. Не дашборд-конструктор. Каждый раз — мини-приложение,
-          сгенерированное под конкретную задачу, в безопасном sandbox.
+          Не чат. Не дашборд-конструктор. Каждый раз — уникальный мини-app
+          под конкретную задачу, в безопасном sandbox. Можно прикрепить файлы.
         </p>
+
         <textarea
           autoFocus
-          value={props.goal}
-          onChange={(e) => props.setGoal(e.target.value)}
+          value={goal}
+          onChange={(e) => setGoal(e.target.value)}
           onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") props.onSubmit();
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onSubmit();
           }}
           placeholder="Например: проверь этот CSV на дубли, или подбери блогеров для FasonAI…"
           rows={5}
         />
+
+        {files.length > 0 && (
+          <div className="composer-files">
+            {files.map((f) => (
+              <span key={f.id} className="file-pill">
+                <span className="file-name">{f.name}</span>
+                <span className="file-size">{fmtBytes(f.size)}</span>
+                <button
+                  className="file-x"
+                  onClick={() =>
+                    setFiles((prev) => prev.filter((x) => x.id !== f.id))
+                  }
+                  aria-label="remove"
+                >×</button>
+              </span>
+            ))}
+          </div>
+        )}
+
         <div className="landing-actions">
+          <label className="ghost file-btn">
+            <input
+              type="file"
+              multiple
+              onChange={(e) => {
+                onPickFiles(e.target.files);
+                e.currentTarget.value = "";
+              }}
+            />
+            Attach
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={autoProceed}
+              onChange={(e) => setAutoProceed(e.target.checked)}
+            />
+            <span>Auto-proceed past plan</span>
+          </label>
+
+          <span className="spacer" />
+
           <button
             className="primary"
-            disabled={!props.goal.trim() || props.submitting}
-            onClick={props.onSubmit}
+            disabled={!goal.trim() || busy}
+            onClick={onSubmit}
           >
-            {props.submitting ? "Запускаю…" : "Generate experience  ⌘↵"}
+            {busy ? "Запускаю…" : "Generate experience  ⌘↵"}
           </button>
-          {props.error && <span className="err">{props.error}</span>}
         </div>
+
+        {err && <div className="err">{err}</div>}
+
         <div className="examples">
           {EXAMPLES.map((e) => (
-            <button key={e} className="chip" onClick={() => props.setGoal(e)}>
+            <button key={e} className="chip" onClick={() => setGoal(e)}>
               {e}
             </button>
           ))}
@@ -280,122 +334,137 @@ function Landing(props: {
   );
 }
 
-function PlanPanel({
-  status,
-  plan,
-  snapshot,
-}: {
-  status: string;
-  plan: TaskPlan | null;
-  snapshot: TaskSnapshot | null;
+
+function ThreadWorkspace(props: {
+  turns: TurnSnap[];
+  tools: Array<{ name: string; title: string; description: string; risk: string; source: string; requires_approval: boolean }>;
+  onApprovalRequest: (req: ApprovalRequest) => void;
+  onTurnUpdated: (t: TurnSnap) => void;
+  onAddTurn: (goal: string, fileIds: string[], autoProceed: boolean) => Promise<void>;
+  registerBridge: (id: string, bridge: Bridge | null) => void;
 }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [props.turns.length]);
+
   return (
-    <div className="panel">
-      <div className="panel-h">
-        <span className="status-pill" data-status={status}>
-          {status}
-        </span>
-        {plan && <span className="mode">{plan.presentation_mode}</span>}
+    <main className="workspace">
+      <div className="thread-scroll" ref={scrollRef}>
+        {props.turns.map((t, i) => (
+          <TurnView
+            key={t.id}
+            turn={t}
+            isLast={i === props.turns.length - 1}
+            tools={props.tools}
+            onApprovalRequest={props.onApprovalRequest}
+            onTurnUpdated={props.onTurnUpdated}
+            registerBridge={props.registerBridge}
+          />
+        ))}
       </div>
-      {snapshot && <div className="goal">{snapshot.goal}</div>}
-      {plan ? (
-        <>
-          <div className="concept">{plan.visual_concept}</div>
-          <div className="rationale">{plan.rationale}</div>
-          <ol className="steps">
-            {plan.steps.map((s, i) => (
-              <li key={i}>{s}</li>
-            ))}
-          </ol>
-          {plan.tool_hints?.length > 0 && (
-            <div className="hints">
-              {plan.tool_hints.map((t) => (
-                <span key={t} className="tag">
-                  {t}
-                </span>
-              ))}
-            </div>
-          )}
-        </>
-      ) : (
-        <div className="dim">Planning…</div>
+      <Composer onSend={props.onAddTurn} />
+    </main>
+  );
+}
+
+
+function Composer(props: {
+  onSend: (goal: string, fileIds: string[], autoProceed: boolean) => Promise<void>;
+}) {
+  const [text, setText] = useState("");
+  const [files, setFiles] = useState<FileRec[]>([]);
+  const [autoProceed, setAutoProceed] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const onSend = async () => {
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    try {
+      await props.onSend(text.trim(), files.map((f) => f.id), autoProceed);
+      setText("");
+      setFiles([]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="composer">
+      <div className="composer-row">
+        <label className="ghost file-btn small">
+          <input
+            type="file"
+            multiple
+            onChange={async (e) => {
+              const list = e.currentTarget.files;
+              e.currentTarget.value = "";
+              if (!list) return;
+              for (const f of Array.from(list)) {
+                try {
+                  const rec = await api.uploadFile(f);
+                  setFiles((p) => p.concat(rec));
+                } catch {}
+              }
+            }}
+          />
+          📎
+        </label>
+        <input
+          type="text"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onSend();
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              onSend();
+            }
+          }}
+          placeholder="Refine, add a follow-up, or start a related task…"
+        />
+        <label className="check small">
+          <input
+            type="checkbox"
+            checked={autoProceed}
+            onChange={(e) => setAutoProceed(e.target.checked)}
+          />
+          <span>auto</span>
+        </label>
+        <button
+          className="primary small"
+          disabled={!text.trim() || busy}
+          onClick={onSend}
+        >
+          {busy ? "…" : "Send"}
+        </button>
+      </div>
+      {files.length > 0 && (
+        <div className="composer-files">
+          {files.map((f) => (
+            <span key={f.id} className="file-pill">
+              <span className="file-name">{f.name}</span>
+              <span className="file-size">{fmtBytes(f.size)}</span>
+              <button
+                className="file-x"
+                onClick={() => setFiles((p) => p.filter((x) => x.id !== f.id))}
+              >×</button>
+            </span>
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
-function EventsPanel({ events }: { events: TaskEvent[] }) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [events.length]);
 
-  const filtered = useMemo(
-    () => events.filter((e) => e.type !== "heartbeat"),
-    [events],
-  );
-  return (
-    <div className="panel events">
-      <div className="panel-h">
-        <span className="panel-title">events</span>
-        <span className="count">{filtered.length}</span>
-      </div>
-      <div className="events-list" ref={ref}>
-        {filtered.map((ev, i) => (
-          <EventRow key={i} ev={ev} />
-        ))}
-        {filtered.length === 0 && <div className="dim">No events yet.</div>}
-      </div>
-    </div>
-  );
-}
-
-function EventRow({ ev }: { ev: TaskEvent }) {
-  const type = String(ev.type);
-  let label = type;
-  let extra: string | null = null;
-  if (type === "tool_called") {
-    label = `→ ${ev.tool}`;
-    extra = ev.risk ? String(ev.risk) : null;
-  } else if (type === "tool_result") {
-    label = `✓ ${ev.tool}`;
-  } else if (type === "tool_error") {
-    label = `✗ ${ev.tool}`;
-    extra = String(ev.message ?? "");
-  } else if (type === "log") {
-    label = `· ${ev.message}`;
-    extra = String(ev.level ?? "");
-  } else if (type === "plan_ready") {
-    label = "plan ready";
-  } else if (type === "ui_ready") {
-    label = `ui ready (${ev.bytes}b)`;
-  } else if (type === "state_patch") {
-    label = "state patched";
-  } else if (type === "final_result") {
-    label = "final result";
-  } else if (type === "approval_required") {
-    label = `approval: ${ev.tool}`;
-  } else if (type === "failed") {
-    label = `failed: ${ev.message}`;
-  }
-  return (
-    <div className={`ev ev-${type}`}>
-      <span className="ev-label">{label}</span>
-      {extra && <span className="ev-extra">{extra}</span>}
-    </div>
-  );
-}
-
-function ApprovalOverlay({
-  requests,
-  onResolve,
-}: {
+function ApprovalOverlay(props: {
   requests: ApprovalRequest[];
   onResolve: (req: ApprovalRequest, ok: boolean) => void;
 }) {
-  const req = requests[0];
+  const req = props.requests[0];
   return (
     <div className="overlay">
       <div className="approval-card">
@@ -407,14 +476,29 @@ function ApprovalOverlay({
           </pre>
         ) : null}
         <div className="approval-actions">
-          <button className="ghost" onClick={() => onResolve(req, false)}>
+          <button className="ghost" onClick={() => props.onResolve(req, false)}>
             Deny
           </button>
-          <button className="primary" onClick={() => onResolve(req, true)}>
+          <button className="primary" onClick={() => props.onResolve(req, true)}>
             Approve
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+
+function fmtAgo(ts: number): string {
+  const sec = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+  return `${(n / 1024 / 1024).toFixed(1)}MB`;
 }

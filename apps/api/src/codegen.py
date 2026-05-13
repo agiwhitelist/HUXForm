@@ -1,10 +1,15 @@
 """UI Generator.
 
-Given a Plan and the available tool capabilities, asks the LLM to emit a
-complete, self-contained HTML document for the task. The document runs
-inside a sandboxed iframe and talks to AGUI exclusively through
-window.agui.* bridge calls. We don't constrain it to a component
-library — every task gets its own micro-app.
+Given a plan + visual brief, produce a self-contained HTML document for
+the iframe stage. Two design rules above all else:
+
+  1. The output must implement the visual_brief faithfully — its palette,
+     typography, layout metaphor, motion vocabulary and microcopy tone are
+     not suggestions, they are constraints.
+
+  2. The output must NOT look like a generic dark SaaS dashboard. We ban
+     common defaults explicitly and force the model to commit to the
+     metaphor selected by the Director.
 """
 
 from __future__ import annotations
@@ -18,61 +23,104 @@ from .tools import ToolRegistry
 
 
 BRIDGE_DOCS = dedent("""
-The runtime exposes a single global, window.agui, with the following async API:
+The runtime exposes window.agui:
 
-  await agui.callTool(name, params)        // Run a tool. Returns the tool's result.
-  await agui.askApproval(label, details)   // Request a user OK for a custom action.
-  agui.setState(patch)                     // Merge a JSON patch into task state (also: agui.callTool('task.set_state', {patch})).
-  agui.getState()                          // Read the latest task state snapshot (sync, cached).
-  agui.finalResult(value)                  // Mark the task complete with a result.
-  agui.log(level, message)                 // Emit a log event (level: 'info' | 'warn' | 'error').
-  agui.onEvent(handler)                    // Subscribe to live task events. Returns unsubscribe.
-  agui.toast(message, kind)                // Show an ephemeral toast (kind: 'info' | 'success' | 'error').
+  agui.plan, agui.tools, agui.goal, agui.taskId, agui.files
+
+  await agui.callTool(name, params)        // run a registered tool
+  await agui.askApproval(label, details)   // request a one-off human OK (returns boolean)
+  agui.setState(patch)                     // merge a JSON patch into task state
+  agui.getState()                          // current state snapshot (sync, cached)
+  agui.finalResult(value)                  // mark the task done with a result
+  agui.log(level, message)                 // emit a log event
+  agui.onEvent(handler)                    // subscribe to live task events
+  agui.toast(message, kind)                // ephemeral toast (kind: 'info' | 'success' | 'error')
+
+  await agui.readFile(file_id)             // read an attached file
+                                           //   text → { text, name, mime, size }
+                                           //   binary → { base64, name, mime, size }
 
 Event objects look like:
-  { type: 'tool_called' | 'tool_result' | 'tool_error' | 'tool_denied'
-        | 'approval_required' | 'state_patch' | 'log' | 'final_result'
-        | 'plan_ready' | 'heartbeat' | ... ,
+  { type: 'tool_called'|'tool_result'|'tool_error'|'approval_required'
+        |'state_patch'|'log'|'final_result'|'narration'|'plan_ready'|... ,
     ...payload }
-
-You also have agui.plan (the planner output) and agui.tools (capability list) available
-synchronously at boot, plus agui.goal (the user's original intent string).
 """).strip()
 
 
 SYSTEM_TEMPLATE = """You are AGUI's UI Generator.
 
-Your job: given a planned task and the available tool capabilities, write a
-SINGLE self-contained HTML document that BECOMES the user-facing interface
-for this specific task. It will be rendered inside a sandboxed iframe.
+Your output is the entire user-facing experience for ONE task. It will
+render inside a sandboxed iframe and is the only thing the human sees
+besides AGUI's own thin shell.
 
-Hard rules:
-  * Output ONLY a complete HTML document, starting with <!DOCTYPE html>.
-    No commentary, no markdown fences, nothing before or after.
-  * No external resources. No <script src=...>, no <link rel=stylesheet href=...>,
-    no Google Fonts, no CDN. Everything inline.
-  * No network requests of any kind from your JS. The ONLY way to do anything
-    that touches the outside world is via window.agui (documented below).
-  * The interface must MATCH the task. A CSV cleaner looks like a data
-    workbench. A deploy console looks like a control room. A research task
-    looks like a scouting radar. Pick a distinct visual identity per task —
-    do not produce a generic "card grid".
-  * Design for the chosen presentation_mode: {mode}. Visual concept: {concept}.
-  * Subscribe to agui.onEvent at boot. Render progress, tool calls, logs, and
-    final result LIVE — do not just dump a static page.
-  * If needs_user_input is true, build the controls the user needs (upload,
-    sliders, toggles, etc). Otherwise the UI should drive itself: kick off
-    the agent's plan from the boot script and reflect events as they arrive.
-  * Use modern, clean CSS. Dark theme by default. Be tasteful, not generic.
-    Use system font stack. Smooth transitions for state changes. Empty
-    states, loading states, error states all matter.
-  * Keep total document under ~30KB. Be concise.
+There are two failure modes you must avoid above everything else:
+
+  1. Looking like a generic AI app. If a stranger glanced at your output
+     and could not tell what task it serves, you have failed. The visual
+     brief below dictates the look — implement it literally.
+
+  2. Falling back to defaults. The visual_brief lists banned_patterns —
+     do not produce them. If you find yourself reaching for a 3-column
+     card grid, a sidebar with hamburger, an avatar in the top right, a
+     plain 0–100 progress bar, or a glassmorphism panel — STOP. The
+     metaphor demands something specific.
+
+Hard technical rules:
+  * Output ONLY one complete HTML document, starting with <!DOCTYPE html>.
+    No markdown fences, no commentary before or after.
+  * No external resources. No <script src=...>, no <link href=...>, no
+    Google Fonts, no CDN, no images by URL. Inline SVG and CSS gradients
+    only. System / web-safe font stacks only.
+  * No fetch / no XHR / no WebSocket — the ONLY way to touch the world is
+    through window.agui (documented below).
+  * Subscribe to agui.onEvent at boot. Render plan steps, tool calls,
+    state patches and final result LIVE. Do not show a static page.
+  * If plan.needs_user_input is true, build the controls the user needs
+    (file picker via agui.files, sliders, toggles, dropdowns, etc.).
+    Otherwise the UI must drive itself: kick off the agent's plan from
+    the boot script, reflect events as they arrive, and call
+    agui.finalResult when done.
+  * Stay self-contained, ≤ 36 KB total. Be concise.
+
+Design contract — use the brief, not your defaults:
+
+  metaphor:        {metaphor}
+  presentation:    {mode}
+  visual concept:  {concept}
+  layout:          {layout}
+  interaction:     {interaction}
+  motion:          {motion}
+  microcopy_tone:  {microcopy_tone}
+
+  palette (use these EXACT hex values):
+{palette}
+
+  typography:
+{typography}
+
+  inspirations:
+{inspirations}
+
+  forbidden defaults (do not produce any of these):
+{banned}
 
 Bridge reference:
 {bridge_docs}
 
-Return ONLY the HTML document.
+Return the full HTML document only.
 """
+
+
+def _format_kv(d: dict[str, str], indent: str = "    ") -> str:
+    if not d:
+        return f"{indent}(unspecified — invent something fitting the metaphor)"
+    return "\n".join(f"{indent}{k}: {v}" for k, v in d.items())
+
+
+def _format_list(items: list[str], indent: str = "    ") -> str:
+    if not items:
+        return f"{indent}(none)"
+    return "\n".join(f"{indent}- {x}" for x in items)
 
 
 class UIGenerator:
@@ -80,34 +128,63 @@ class UIGenerator:
         self.llm = llm
         self.registry = registry
 
-    async def generate(self, *, goal: str, plan: TaskPlan) -> str:
+    async def generate(
+        self,
+        *,
+        goal: str,
+        plan: TaskPlan,
+        files: list[dict] | None = None,
+    ) -> tuple[str, dict]:
+        brief = plan.visual_brief
+        if brief is None:
+            # Fallback brief so codegen still has constraints
+            brief_dict = {
+                "metaphor": "a focused single-purpose tool, not a dashboard",
+                "palette": {"bg": "#0f1116", "ink": "#e6e8ef", "accent": "#7aa2ff"},
+                "typography": {"display": "system-ui", "body": "system-ui", "mono": "ui-monospace"},
+                "layout": "single-column, generous whitespace",
+                "interaction": "direct manipulation",
+                "motion": "subtle",
+                "microcopy_tone": "concise",
+                "banned_patterns": [],
+                "inspirations": [],
+            }
+        else:
+            brief_dict = brief.to_dict()
+
         system = SYSTEM_TEMPLATE.format(
+            metaphor=brief_dict.get("metaphor", ""),
             mode=plan.presentation_mode,
             concept=plan.visual_concept,
+            layout=brief_dict.get("layout", ""),
+            interaction=brief_dict.get("interaction", ""),
+            motion=brief_dict.get("motion", ""),
+            microcopy_tone=brief_dict.get("microcopy_tone", ""),
+            palette=_format_kv(brief_dict.get("palette") or {}),
+            typography=_format_kv(brief_dict.get("typography") or {}),
+            inspirations=_format_list(brief_dict.get("inspirations") or []),
+            banned=_format_list(brief_dict.get("banned_patterns") or []),
             bridge_docs=BRIDGE_DOCS,
         )
+
         user_payload = {
             "goal": goal,
-            "plan": {
-                "task_type": plan.task_type,
-                "presentation_mode": plan.presentation_mode,
-                "visual_concept": plan.visual_concept,
-                "rationale": plan.rationale,
-                "steps": plan.steps,
-                "tool_hints": plan.tool_hints,
-                "needs_user_input": plan.needs_user_input,
-            },
+            "plan": plan.to_dict(),
+            "files": files or [],
             "tools": self.registry.bridge_schema(),
         }
         user_msg = (
             "Build the AGUI experience for this task.\n\n"
             "```json\n" + json.dumps(user_payload, ensure_ascii=False, indent=2) + "\n```\n\n"
-            "Return the full HTML document now."
+            "Implement the visual brief literally. Do not fall back to a generic dark "
+            "card-grid dashboard. Return the full HTML document now."
         )
         reply = await self.llm.complete(
             system=system,
             messages=[{"role": "user", "content": user_msg}],
-            temperature=0.7,
+            temperature=0.75,
             max_tokens=8192,
         )
-        return extract_html(reply.text)
+        html = extract_html(reply.text)
+        usage = (reply.raw or {}).get("usage") or {}
+        return html, usage

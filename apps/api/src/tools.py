@@ -1,21 +1,20 @@
-"""Built-in tool registry + execution broker.
+"""Built-in tool registry + handlers.
 
-Tools are the only way generated UI code is allowed to touch the outside
-world. Each tool declares its name, description, parameter schema, and
-risk class. The Permission Layer (see executor.py) decides whether a call
-goes through immediately, needs approval, or is dry-run only.
-
-This MVP ships a small, useful set of tools. Adding new tools is just a
-matter of registering another @tool function — Tool Discovery / MCP /
-CLI adapters plug in here later.
+This module exposes a process-wide ToolRegistry. The base set is registered
+by register_builtin_tools(); discovery adapters (MCP, OpenAPI, CLI) add
+more at startup or on user request.
 """
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import csv
 import io
-import json
+import os
 import re
+import shutil
+import subprocess
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -35,6 +34,8 @@ class Tool:
     params_schema: dict[str, Any]
     requires_approval: bool
     handler: Callable[..., Awaitable[Any]]
+    source: str = "builtin"  # builtin | mcp | openapi | cli
+    examples: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -44,15 +45,17 @@ class ToolRegistry:
     def register(self, tool: Tool) -> None:
         self.tools[tool.name] = tool
 
+    def unregister(self, name: str) -> None:
+        self.tools.pop(name, None)
+
     def get(self, name: str) -> Tool | None:
         return self.tools.get(name)
 
     def describe(self) -> str:
         lines: list[str] = []
         for t in self.tools.values():
-            lines.append(
-                f"- {t.name} ({t.risk}{', approval' if t.requires_approval else ''}): {t.description}"
-            )
+            extra = ", approval" if t.requires_approval else ""
+            lines.append(f"- {t.name} [{t.source}] ({t.risk}{extra}): {t.description}")
         return "\n".join(lines)
 
     def bridge_schema(self) -> list[dict[str, Any]]:
@@ -63,7 +66,9 @@ class ToolRegistry:
                 "description": t.description,
                 "risk": t.risk,
                 "requires_approval": t.requires_approval,
+                "source": t.source,
                 "params": t.params_schema,
+                "examples": t.examples,
             }
             for t in self.tools.values()
         ]
@@ -81,7 +86,7 @@ def describe_tools() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Built-in tool implementations
+# Built-in handlers
 # ---------------------------------------------------------------------------
 
 
@@ -91,7 +96,7 @@ async def _llm_ask(*, llm: LLMClient, prompt: str, system: str | None = None) ->
         messages=[{"role": "user", "content": prompt}],
         temperature=0.5,
     )
-    return {"text": reply.text}
+    return {"text": reply.text, "usage": reply.usage}
 
 
 async def _llm_structured(*, llm: LLMClient, prompt: str, schema_hint: str) -> dict[str, Any]:
@@ -105,18 +110,12 @@ async def _llm_structured(*, llm: LLMClient, prompt: str, schema_hint: str) -> d
         messages=[{"role": "user", "content": user}],
         temperature=0.2,
     )
-    return {"value": extract_json(reply.text)}
+    return {"value": extract_json(reply.text), "usage": reply.usage}
 
 
-async def _web_search(*, llm: LLMClient, query: str, limit: int = 5) -> dict[str, Any]:
-    """Stubbed web search.
-
-    For the MVP we don't ship a real search backend; we ask the model to
-    *invent* plausible candidates so generated UIs have something to draw.
-    Wire this to a real search adapter (Tavily, Brave, SerpAPI) when ready.
-    """
+async def _web_search_stub(*, llm: LLMClient, query: str, limit: int = 5) -> dict[str, Any]:
     sys = (
-        "You simulate a web search result list. Return JSON: "
+        "You simulate a web search. Return JSON: "
         '{"results": [{"title": str, "url": str, "snippet": str, "score": 0..1}]}'
         f". At most {limit} results. Use realistic-looking but clearly illustrative data."
     )
@@ -126,13 +125,37 @@ async def _web_search(*, llm: LLMClient, query: str, limit: int = 5) -> dict[str
         temperature=0.4,
     )
     try:
-        data = extract_json(reply.text)
+        return extract_json(reply.text)
     except ValueError:
-        data = {"results": []}
-    return data
+        return {"results": []}
 
 
-_NUM_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
+async def _web_search_tavily(*, api_key: str, query: str, limit: int = 5) -> dict[str, Any]:
+    import httpx
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.post(
+            "https://api.tavily.com/search",
+            json={
+                "api_key": api_key,
+                "query": query,
+                "max_results": int(limit),
+                "search_depth": "basic",
+            },
+        )
+        r.raise_for_status()
+        data = r.json()
+    results = []
+    for item in data.get("results", []) or []:
+        results.append({
+            "title": item.get("title"),
+            "url": item.get("url"),
+            "snippet": item.get("content"),
+            "score": item.get("score"),
+        })
+    return {"results": results, "answer": data.get("answer")}
+
+
+_NUM_RE = re.compile(r"^-?\d+(?:[.,]\d+)?$")
 
 
 async def _csv_parse(*, text: str, delimiter: str | None = None) -> dict[str, Any]:
@@ -151,7 +174,6 @@ async def _csv_parse(*, text: str, delimiter: str | None = None) -> dict[str, An
         return {"columns": [], "rows": [], "row_count": 0}
     columns = rows[0]
     data_rows = [dict(zip(columns, r)) for r in rows[1:] if any(c.strip() for c in r)]
-    # infer column types
     col_types: dict[str, str] = {}
     for col in columns:
         sample_vals = [r.get(col, "") for r in data_rows[:200] if r.get(col, "").strip()]
@@ -190,14 +212,12 @@ async def _csv_find_duplicates(
     for key, indices in groups.items():
         if len(indices) > 1:
             duplicate_rows += len(indices)
-            dup_groups.append(
-                {
-                    "key": dict(zip(keys, key)),
-                    "indices": indices,
-                    "rows": [rows[i] for i in indices],
-                    "count": len(indices),
-                }
-            )
+            dup_groups.append({
+                "key": dict(zip(keys, key)),
+                "indices": indices,
+                "rows": [rows[i] for i in indices],
+                "count": len(indices),
+            })
     dup_groups.sort(key=lambda g: g["count"], reverse=True)
     return {
         "groups": dup_groups,
@@ -223,20 +243,18 @@ async def _csv_summarize(*, rows: list[dict[str, Any]], column_types: dict[str, 
             "distinct": len(set(map(str, non_empty))),
         }
         if column_types.get(col) == "number":
-            nums = []
+            nums: list[float] = []
             for v in non_empty:
                 try:
-                    nums.append(float(v))
+                    nums.append(float(str(v).replace(",", ".")))
                 except (TypeError, ValueError):
                     pass
             if nums:
-                col_summary.update(
-                    {
-                        "min": min(nums),
-                        "max": max(nums),
-                        "mean": sum(nums) / len(nums),
-                    }
-                )
+                col_summary.update({
+                    "min": min(nums),
+                    "max": max(nums),
+                    "mean": sum(nums) / len(nums),
+                })
         else:
             top = Counter(map(str, non_empty)).most_common(5)
             col_summary["top"] = [{"value": v, "count": c} for v, c in top]
@@ -244,32 +262,134 @@ async def _csv_summarize(*, rows: list[dict[str, Any]], column_types: dict[str, 
     return {"summary": summary, "row_count": len(rows)}
 
 
-async def _task_set_state(*, task_ref: Any, patch: dict[str, Any]) -> dict[str, Any]:
-    task_ref.state.update(patch)
-    task_ref.emit({"type": "state_patch", "patch": patch})
-    return {"ok": True, "state": dict(task_ref.state)}
+async def _files_read(*, file_id: str, turn_ref: Any) -> dict[str, Any]:
+    from .runtime import registry as get_runtime_registry  # local import to avoid cycle
+    reg = get_runtime_registry()
+    rec = reg.get_file(file_id)
+    if rec is None or file_id not in (turn_ref.file_ids or []):
+        raise ValueError(f"file not found or not attached to this turn: {file_id}")
+    with open(rec.path, "rb") as f:
+        raw = f.read()
+    # Try utf-8 text first
+    try:
+        text = raw.decode("utf-8")
+        return {"name": rec.name, "mime": rec.mime, "size": rec.size, "text": text}
+    except UnicodeDecodeError:
+        return {
+            "name": rec.name,
+            "mime": rec.mime,
+            "size": rec.size,
+            "base64": base64.b64encode(raw).decode("ascii"),
+        }
 
 
-async def _task_final_result(*, task_ref: Any, result: Any) -> dict[str, Any]:
-    task_ref.final_result = result
-    task_ref.status = "done"
-    task_ref.emit({"type": "final_result", "result": result})
+async def _task_set_state(*, turn_ref: Any, patch: dict[str, Any]) -> dict[str, Any]:
+    turn_ref.state.update(patch)
+    turn_ref.emit({"type": "state_patch", "patch": patch})
+    return {"ok": True, "state": dict(turn_ref.state)}
+
+
+async def _task_final_result(*, turn_ref: Any, result: Any) -> dict[str, Any]:
+    turn_ref.final_result = result
+    turn_ref.status = "done"
+    turn_ref.emit({"type": "final_result", "result": result})
     return {"ok": True}
 
 
-async def _task_log(*, task_ref: Any, level: str, message: str) -> dict[str, Any]:
-    task_ref.emit({"type": "log", "level": level, "message": message})
+async def _task_log(*, turn_ref: Any, level: str = "info", message: str = "") -> dict[str, Any]:
+    turn_ref.emit({"type": "log", "level": level, "message": message})
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# CLI exec (sandboxed-ish; off by default unless AGUI_ENABLE_CLI=1)
+# ---------------------------------------------------------------------------
+
+_CLI_ALLOW = set(os.environ.get("AGUI_CLI_ALLOWLIST", "").split(":")) if os.environ.get("AGUI_CLI_ALLOWLIST") else set()
+
+
+async def _cli_exec(*, command: str, args: list[str] | None = None, timeout: int = 30) -> dict[str, Any]:
+    if not os.environ.get("AGUI_ENABLE_CLI"):
+        raise RuntimeError("cli.exec is disabled (set AGUI_ENABLE_CLI=1 to enable)")
+    if _CLI_ALLOW and command not in _CLI_ALLOW:
+        raise RuntimeError(f"command not in AGUI_CLI_ALLOWLIST: {command}")
+    binpath = shutil.which(command)
+    if not binpath:
+        raise FileNotFoundError(command)
+    proc = await asyncio.create_subprocess_exec(
+        binpath, *(args or []),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise
+    return {
+        "exit": proc.returncode,
+        "stdout": out.decode("utf-8", errors="replace"),
+        "stderr": err.decode("utf-8", errors="replace"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# CLI discovery (introspect PATH at startup)
+# ---------------------------------------------------------------------------
+
+
+_INTERESTING_BINS = [
+    "git", "gh", "curl", "jq", "python", "node", "npm", "pip", "uv", "ls", "rg",
+    "find", "head", "tail", "wc", "tr", "sort", "uniq", "cat", "echo", "date",
+    "make", "docker", "kubectl", "psql", "redis-cli", "ffmpeg",
+]
+
+
+def discover_cli_tools(registry: ToolRegistry) -> int:
+    """Register cli.<name> tools for binaries we know about. Off unless AGUI_ENABLE_CLI=1."""
+    if not os.environ.get("AGUI_ENABLE_CLI"):
+        return 0
+    n = 0
+    for name in _INTERESTING_BINS:
+        path = shutil.which(name)
+        if not path:
+            continue
+        # Best-effort description from first line of --help
+        desc = ""
+        try:
+            r = subprocess.run([path, "--help"], capture_output=True, text=True, timeout=2)
+            head = (r.stdout or r.stderr or "").strip().splitlines()[:1]
+            desc = head[0].strip() if head else ""
+        except Exception:
+            desc = ""
+        description = f"Run `{name}` CLI. {desc}".strip()
+        risk: Risk = "destructive" if name in ("docker", "kubectl", "rm", "git") else "filesystem"
+        registry.register(Tool(
+            name=f"cli.{name}",
+            title=f"Run {name}",
+            description=description,
+            risk=risk,
+            requires_approval=True,
+            params_schema={"args?": "array<string>", "timeout?": "integer"},
+            handler=lambda command=name, **kw: _cli_exec(command=command, **kw),
+            source="cli",
+        ))
+        n += 1
+    return n
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap
+# ---------------------------------------------------------------------------
 
 
 def register_builtin_tools(llm: LLMClient) -> ToolRegistry:
-    """Populate the global registry. Idempotent."""
     _REGISTRY.tools.clear()
 
     _REGISTRY.register(Tool(
         name="llm.ask",
         title="Ask the underlying LLM",
-        description="Send a free-form prompt to AGUI's underlying LLM and get text back. Use for short reasoning, summaries, copywriting.",
+        description="Send a free-form prompt to AGUI's LLM. Use for short reasoning, summaries, copywriting.",
         risk="read",
         requires_approval=False,
         params_schema={"prompt": "string", "system?": "string"},
@@ -279,27 +399,39 @@ def register_builtin_tools(llm: LLMClient) -> ToolRegistry:
     _REGISTRY.register(Tool(
         name="llm.structured",
         title="Ask the LLM for structured JSON",
-        description="Generate a JSON value matching a schema hint. Use for plans, comparisons, lists of cards, scoring tables.",
+        description="Generate a JSON value matching a schema hint. Use for plans, comparisons, scoring tables.",
         risk="read",
         requires_approval=False,
         params_schema={"prompt": "string", "schema_hint": "string"},
         handler=lambda **kw: _llm_structured(llm=llm, **kw),
     ))
 
-    _REGISTRY.register(Tool(
-        name="web.search",
-        title="Web search",
-        description="Search the public web. MVP: simulated results — wire to a real search backend in production.",
-        risk="network",
-        requires_approval=False,
-        params_schema={"query": "string", "limit?": "integer"},
-        handler=lambda **kw: _web_search(llm=llm, **kw),
-    ))
+    tavily_key = os.environ.get("TAVILY_API_KEY", "")
+    if tavily_key:
+        _REGISTRY.register(Tool(
+            name="web.search",
+            title="Web search (Tavily)",
+            description="Search the public web via Tavily.",
+            risk="network",
+            requires_approval=False,
+            params_schema={"query": "string", "limit?": "integer"},
+            handler=lambda **kw: _web_search_tavily(api_key=tavily_key, **kw),
+        ))
+    else:
+        _REGISTRY.register(Tool(
+            name="web.search",
+            title="Web search (simulated)",
+            description="Search the public web. No backend configured — results are illustrative. Set TAVILY_API_KEY for real search.",
+            risk="network",
+            requires_approval=False,
+            params_schema={"query": "string", "limit?": "integer"},
+            handler=lambda **kw: _web_search_stub(llm=llm, **kw),
+        ))
 
     _REGISTRY.register(Tool(
         name="data.parse_csv",
         title="Parse CSV text",
-        description="Parse CSV text into columns + typed rows. Sniffs delimiter automatically.",
+        description="Parse CSV text into typed columns + rows. Sniffs delimiter automatically.",
         risk="read",
         requires_approval=False,
         params_schema={"text": "string", "delimiter?": "string"},
@@ -319,11 +451,21 @@ def register_builtin_tools(llm: LLMClient) -> ToolRegistry:
     _REGISTRY.register(Tool(
         name="data.summarize",
         title="Summarize tabular data",
-        description="Per-column stats: non-empty, distinct, top values, min/max/mean for numeric columns.",
+        description="Per-column stats: non-empty, distinct, top values, min/max/mean.",
         risk="read",
         requires_approval=False,
         params_schema={"rows": "array<object>", "column_types?": "object"},
         handler=_csv_summarize,
+    ))
+
+    _REGISTRY.register(Tool(
+        name="files.read",
+        title="Read an attached file",
+        description="Read a file the user attached to this turn. Returns text if UTF-8, otherwise base64.",
+        risk="read",
+        requires_approval=False,
+        params_schema={"file_id": "string"},
+        handler=_files_read,
     ))
 
     _REGISTRY.register(Tool(
@@ -352,8 +494,9 @@ def register_builtin_tools(llm: LLMClient) -> ToolRegistry:
         description="Push a log event into the task event stream. Level: info | warn | error.",
         risk="write",
         requires_approval=False,
-        params_schema={"level": "string", "message": "string"},
+        params_schema={"level?": "string", "message": "string"},
         handler=_task_log,
     ))
 
+    discover_cli_tools(_REGISTRY)
     return _REGISTRY

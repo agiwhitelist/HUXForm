@@ -27,6 +27,16 @@ from .config import LLMConfig, load_llm_config
 class LLMReply:
     text: str
     raw: dict[str, Any]
+    usage: dict[str, int] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.usage is None:
+            u = (self.raw or {}).get("usage") or {}
+            # normalize Anthropic + OpenAI shapes
+            self.usage = {
+                "input_tokens": int(u.get("input_tokens") or u.get("prompt_tokens") or 0),
+                "output_tokens": int(u.get("output_tokens") or u.get("completion_tokens") or 0),
+            }
 
 
 class LLMClient:
