@@ -26,6 +26,17 @@ export function TurnView({ turn: initial, isLast, tools, onApprovalRequest, onTu
   const [showInspector, setShowInspector] = useState(false);
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [stageHidden, setStageHidden] = useState(false);
+  const [refineOpen, setRefineOpen] = useState(false);
+  const [refineNote, setRefineNote] = useState("");
+  const [regenBusy, setRegenBusy] = useState(false);
+  const uiVersionRef = useRef(0);
+
+  // Old turns auto-collapse their iframe (still in DOM, just hidden); user can expand.
+  useEffect(() => {
+    if (!isLast) setStageHidden(true);
+    else setStageHidden(false);
+  }, [isLast]);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const bridgeRef = useRef<Bridge | null>(null);
@@ -67,6 +78,16 @@ export function TurnView({ turn: initial, isLast, tools, onApprovalRequest, onTu
           setTurn((p) => ({ ...p, status: "generating" }));
         } else if (ev.type === "ui_ready") {
           setTurn((p) => ({ ...p, has_ui: true, status: "running" }));
+          if ((ev as any).regenerated) {
+            // Force-reload the iframe with a new src
+            const f = iframeRef.current;
+            if (f) {
+              uiVersionRef.current += 1;
+              f.src = `/api/turns/${turn.id}/ui?v=${uiVersionRef.current}&t=${Date.now()}`;
+            }
+          }
+        } else if (ev.type === "regenerating") {
+          setTurn((p) => ({ ...p, status: "generating" }));
         } else if (ev.type === "running") {
           setTurn((p) => ({ ...p, status: "running" }));
         } else if (ev.type === "final_result") {
@@ -132,6 +153,18 @@ export function TurnView({ turn: initial, isLast, tools, onApprovalRequest, onTu
     } catch {}
   }, [turn.id]);
 
+  const onRegenerate = useCallback(async () => {
+    if (regenBusy) return;
+    setRegenBusy(true);
+    try {
+      await api.regenerate(turn.id, refineNote.trim() || undefined);
+      setRefineNote("");
+      setRefineOpen(false);
+    } catch {} finally {
+      setRegenBusy(false);
+    }
+  }, [turn.id, refineNote, regenBusy]);
+
   const plan = turn.plan;
   const brief = plan?.visual_brief || null;
   const status = turn.status;
@@ -166,15 +199,22 @@ export function TurnView({ turn: initial, isLast, tools, onApprovalRequest, onTu
           plan={plan}
           brief={brief}
           status={status}
+          isLast={isLast}
           onProceed={onProceed}
           onCancel={onCancel}
+          onRegenerate={onRegenerate}
+          regenBusy={regenBusy}
+          refineOpen={refineOpen}
+          refineNote={refineNote}
+          onRefineToggle={() => setRefineOpen((v) => !v)}
+          onRefineChange={setRefineNote}
           collapsed={collapsed && !isLast}
           onToggleCollapsed={() => setCollapsed((v) => !v)}
         />
       ) : (
         <div className="plan-card plan-pending">
           <div className="plan-pending-dot" />
-          <span>AGUI is reading the task and choosing the right shape…</span>
+          <span>Reading the task and choosing the right shape…</span>
         </div>
       )}
 
@@ -183,16 +223,31 @@ export function TurnView({ turn: initial, isLast, tools, onApprovalRequest, onTu
       )}
 
       {showStage && !collapsed && (
-        <div className="stage-wrap">
-          <iframe
-            ref={iframeRef}
-            className="stage-frame"
-            title={`AGUI turn ${turn.id}`}
-            sandbox="allow-scripts allow-forms allow-pointer-lock allow-popups"
-            src="about:blank"
-          />
-          {!turn.has_ui && <StageSkeleton brief={brief} />}
-        </div>
+        <>
+          {stageHidden ? (
+            <button className="stage-restore" onClick={() => setStageHidden(false)}>
+              Show generated experience
+            </button>
+          ) : (
+            <div className="stage-wrap">
+              {!isLast && (
+                <button
+                  className="stage-hide"
+                  onClick={() => setStageHidden(true)}
+                  title="Hide stage"
+                >–</button>
+              )}
+              <iframe
+                ref={iframeRef}
+                className="stage-frame"
+                title={`turn ${turn.id}`}
+                sandbox="allow-scripts allow-forms allow-pointer-lock allow-popups"
+                src="about:blank"
+              />
+              {!turn.has_ui && <StageSkeleton brief={brief} />}
+            </div>
+          )}
+        </>
       )}
 
       <NarrationStream items={narrations} />
@@ -225,19 +280,37 @@ function PlanCard({
   plan,
   brief,
   status,
+  isLast,
   onProceed,
   onCancel,
+  onRegenerate,
+  regenBusy,
+  refineOpen,
+  refineNote,
+  onRefineToggle,
+  onRefineChange,
   collapsed,
   onToggleCollapsed,
 }: {
   plan: NonNullable<TurnSnap["plan"]>;
   brief: ReturnType<() => any> | null;
   status: string;
+  isLast: boolean;
   onProceed: () => void;
   onCancel: () => void;
+  onRegenerate: () => void;
+  regenBusy: boolean;
+  refineOpen: boolean;
+  refineNote: string;
+  onRefineToggle: () => void;
+  onRefineChange: (v: string) => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }) {
+  const canRegenerate =
+    isLast &&
+    plan.presentation_mode !== "answer_only" &&
+    (status === "running" || status === "done" || status === "failed");
   const palette = brief?.palette || {};
   const swatches = Object.entries(palette).slice(0, 6);
   return (
@@ -305,6 +378,48 @@ function PlanCard({
           <span className="steer-prompt">Proceed with this approach?</span>
           <button className="ghost" onClick={onCancel}>Cancel</button>
           <button className="primary small" onClick={onProceed}>Proceed</button>
+        </div>
+      )}
+
+      {canRegenerate && !collapsed && (
+        <div className="plan-regen">
+          {!refineOpen ? (
+            <>
+              <button className="ghost xs" onClick={onRefineToggle}>
+                Refine…
+              </button>
+              <button
+                className="ghost xs"
+                onClick={onRegenerate}
+                disabled={regenBusy}
+                title="Regenerate the interface from the same plan"
+              >
+                {regenBusy ? "Regenerating…" : "Regenerate UI ↻"}
+              </button>
+            </>
+          ) : (
+            <div className="refine-row">
+              <input
+                autoFocus
+                className="refine-input"
+                value={refineNote}
+                placeholder="e.g. denser table, warmer palette, add export button"
+                onChange={(e) => onRefineChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") onRegenerate();
+                  if (e.key === "Escape") onRefineToggle();
+                }}
+              />
+              <button className="ghost xs" onClick={onRefineToggle}>cancel</button>
+              <button
+                className="primary small"
+                disabled={regenBusy}
+                onClick={onRegenerate}
+              >
+                {regenBusy ? "…" : "Apply"}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

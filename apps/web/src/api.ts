@@ -106,6 +106,9 @@ export const api = {
   approve: (id: string, approval_id: string, approved: boolean) =>
     jpost(`/api/turns/${id}/approve`, { approval_id, approved }),
 
+  regenerate: (id: string, refine_note?: string) =>
+    jpost(`/api/turns/${id}/regenerate`, { refine_note: refine_note || null }),
+
   uploadFile: async (file: File): Promise<FileRec> => {
     const fd = new FormData();
     fd.append("file", file);

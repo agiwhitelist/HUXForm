@@ -174,9 +174,23 @@ function TopBar(props: {
   return (
     <header className="topbar">
       <div className="brand">
-        <span className="dot" />
-        <span className="brand-name">AGUI</span>
-        <span className="brand-sub">generative human-experience runtime</span>
+        <svg className="brand-mark" viewBox="0 0 64 64" aria-hidden="true">
+          <defs>
+            <linearGradient id="bm-1" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%"   stopColor="#7C5CFF"/>
+              <stop offset="100%" stopColor="#FF8A5C"/>
+            </linearGradient>
+            <linearGradient id="bm-2" x1="0" y1="1" x2="1" y2="0">
+              <stop offset="0%"   stopColor="#5BD2A2"/>
+              <stop offset="100%" stopColor="#7C5CFF"/>
+            </linearGradient>
+          </defs>
+          <circle cx="32" cy="32" r="26" stroke="url(#bm-2)" strokeWidth="2" strokeDasharray="4 3" opacity=".55" fill="none"/>
+          <rect x="14" y="14" width="36" height="36" rx="9" stroke="url(#bm-1)" strokeWidth="2.4" fill="none"/>
+          <path d="M 32 21 L 45 43 L 19 43 Z" stroke="#FF8A5C" strokeWidth="2.4" strokeLinejoin="round" fill="none"/>
+        </svg>
+        <span className="brand-name">Morphic</span>
+        <span className="brand-sub">the interface takes the shape of the task</span>
       </div>
       <div className="top-right">
         <div className="threads-menu">
@@ -252,7 +266,7 @@ function Landing(props: {
   return (
     <div className="landing">
       <div className="landing-inner">
-        <h1>Опиши задачу — AGUI придумает интерфейс под неё.</h1>
+        <h1>Опиши задачу — Morphic придумает интерфейс под неё.</h1>
         <p className="lede">
           Не чат. Не дашборд-конструктор. Каждый раз — уникальный мини-app
           под конкретную задачу, в безопасном sandbox. Можно прикрепить файлы.

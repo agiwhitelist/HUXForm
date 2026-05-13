@@ -1,94 +1,116 @@
-# AGUI
+<div align="center">
 
-> **AGUI** is a generative human-experience runtime for AI agents.
->
-> User describes a task. AGUI **directs** a unique visual concept for it,
+<img src="./assets/banner.svg" alt="Morphic — the interface takes the shape of the task" width="100%" />
+
+<p>
+  <a href="#quickstart"><img alt="quickstart" src="https://img.shields.io/badge/start-quick-7C5CFF?style=flat-square"></a>
+  <img alt="python" src="https://img.shields.io/badge/python-3.11+-1f2530?style=flat-square&labelColor=11151c">
+  <img alt="node" src="https://img.shields.io/badge/node-20+-1f2530?style=flat-square&labelColor=11151c">
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-1f2530?style=flat-square&labelColor=11151c">
+  <img alt="status" src="https://img.shields.io/badge/status-MVP-FF8A5C?style=flat-square">
+</p>
+
+</div>
+
+> **Morphic** is a generative human-experience runtime for AI agents.
+> User describes a task. Morphic **directs** a unique visual concept for it,
 > generates a self-contained mini-app on the fly, and runs it inside a
-> sandboxed iframe that talks to AGUI through a safe bridge.
+> sandboxed iframe that talks back through a safe bridge.
 
 Not a chat. Not a dashboard builder. Not a component library. Each task
 gets its own interface, designed to fit the task — not a templated one.
 
 ```text
-Intent → Plan + Visual Brief → Generated HTML/CSS/JS → Sandboxed iframe
-       ↔ AGUI Bridge (postMessage) ↔ Tool Broker + Permission Layer
-                                       ↳ built-in tools + MCP + OpenAPI + CLI
+Intent → Plan + Visual Brief → Generated mini-app → Bridged tools
 ```
 
-See [`idea.md`](./idea.md) for the long form.
-
-## What's inside
-
-### Backend (`apps/api`)
-- `director.py` — **Director**. One LLM pass that produces (a) a presentation
-  plan and (b) a structured *visual brief*: metaphor, palette, typography,
-  layout, motion vocabulary, microcopy tone, banned defaults, real-world
-  inspirations.
-- `codegen.py` — **UI Generator**. Consumes the brief and emits a single
-  self-contained HTML document. The system prompt actively forbids
-  generic dark-SaaS templates.
-- `executor.py` — **Tool Broker + Permission Layer**. Per-tool risk class
-  determines whether a call runs unattended, needs approval, or supports
-  dry-run.
-- `tools.py` — built-in capabilities (`llm.ask`, `llm.structured`,
-  `web.search`, `data.parse_csv`, `data.find_duplicates`, `data.summarize`,
-  `files.read`, `task.*`, optional `cli.*`).
-- `mcp_client.py` — stdio MCP-client manager. Spawn servers from
-  `.agui/mcp.json`, list their tools, register each as `mcp.<alias>.<name>`.
-- `openapi_adapter.py` — Load any OpenAPI 3.x spec and expose every
-  operation as `openapi.<alias>.<operationId>`.
-- `narrator.py` — Watches each turn's event stream and emits
-  human-friendly `narration` events (single-sentence summaries).
-- `tasks.py` — Domain model: Thread → Turn → events / state / files.
-- `persistence.py` — SQLite store with hydration on boot.
-- `audit.py` — Append-only audit log (tool calls, approvals).
-- `runtime_stub.py` — The `window.agui` shim injected into every served
-  document.
-
-### Frontend (`apps/web`)
-- Threaded workspace: each user message is a *turn*, AGUI's response is
-  (plan card → generated iframe → live narration → final result).
-- Composer at the bottom with file attachments (uploaded immediately).
-- Plan steering: when AGUI proposes a non-trivial plan, you can Proceed
-  or Cancel before codegen burns tokens.
-- Per-turn Inspector with raw event stream.
-- Approval overlay (both for backend tool approvals and iframe-initiated
-  `agui.askApproval` requests).
+---
 
 ## Why "non-template"
 
 A normal LLM-generated UI converges on the same generic look:
-three-column dark cards, a sidebar, a hamburger, glassmorphism panels.
-That makes every task feel the same. AGUI fights this in two places:
+three-column dark cards, sidebar, hamburger, glassmorphism. Every task
+ends up feeling the same. Morphic fights this in two places:
 
-1. **The Director outputs a visual brief** with a concrete *metaphor*
-   (a duplicate-finder bench, a sonar sweep, a reading room) plus a
-   palette and an explicit list of banned defaults.
-2. **The UI Generator system prompt** treats the brief as a constraint
-   and explicitly forbids the common defaults.
+1. **The Director** outputs a structured *visual brief* — a concrete
+   metaphor (a duplicate-finder bench, a sonar sweep, a reading room),
+   palette, typography, motion, and an **explicit list of banned
+   defaults**.
+2. **The UI Generator** prompt treats the brief as a constraint and
+   forbids the common SaaS defaults.
 
 Result: a CSV cleaner doesn't look like an influencer scout, which
 doesn't look like a deploy console.
 
-## Provider configuration
+<div align="center">
+  <table>
+    <tr>
+      <td align="center" width="50%">
+        <img src="./assets/screenshot-csv.svg" alt="CSV duplicate bench — generated UI" width="100%"/>
+        <sub><b>generated_app · duplicate_bench</b><br/>warm paper palette, ledger typography, horizontal rails of grouped specimens</sub>
+      </td>
+      <td align="center" width="50%">
+        <img src="./assets/screenshot-radar.svg" alt="Influencer scouting radar — generated UI" width="100%"/>
+        <sub><b>status_view · influencer_scouting_radar</b><br/>cold sonar palette, monospaced HUD, concentric range rings</sub>
+      </td>
+    </tr>
+  </table>
+</div>
 
-AGUI is provider-agnostic. Pick the protocol your provider speaks:
+Same runtime, two completely different generated interfaces — picked
+and built per task.
 
-| Var                   | Default                              | Notes                                  |
-|-----------------------|--------------------------------------|----------------------------------------|
-| `AGUI_LLM_PROTOCOL`   | `anthropic`                          | `anthropic` (Messages) or `openai`     |
-| `AGUI_LLM_BASE_URL`   | `https://api.minimax.io/anthropic`   | Provider base URL.                     |
-| `AGUI_LLM_MODEL`      | `MiniMax-M2`                         | Model id.                              |
-| `AGUI_LLM_API_KEY`    | —                                    | API key.                               |
-| `AGUI_LLM_MAX_TOKENS` | `4096`                               |                                        |
-| `AGUI_LLM_TEMPERATURE`| `0.6`                                |                                        |
-| `TAVILY_API_KEY`      | —                                    | If set, `web.search` uses Tavily.      |
-| `AGUI_MCP_CONFIG`     | `.agui/mcp.json`                     | Optional MCP server config.            |
-| `AGUI_DATA_DIR`       | `.agui-data`                         | SQLite + uploads live here.            |
-| `AGUI_ENABLE_CLI`     | unset                                | Enables `cli.*` host-CLI tools.        |
-| `AGUI_CLI_ALLOWLIST`  | unset                                | Optional `:`-separated allowlist.      |
+---
 
-## Bridge API (inside generated UI)
+## Architecture
+
+<div align="center">
+  <img src="./assets/architecture.svg" alt="Morphic architecture" width="100%"/>
+</div>
+
+| Module                              | Role                                                                                                   |
+|-------------------------------------|--------------------------------------------------------------------------------------------------------|
+| `apps/api/src/director.py`          | One LLM pass → presentation plan + visual brief (palette, typography, layout, motion, banned defaults) |
+| `apps/api/src/codegen.py`           | UI Generator. Consumes the brief, emits one self-contained HTML doc.                                   |
+| `apps/api/src/runtime_stub.py`      | `window.agui.*` shim injected into every served document.                                              |
+| `apps/api/src/executor.py`          | Tool Broker + Permission Layer + dry-run + approvals.                                                  |
+| `apps/api/src/tools.py`             | Built-in capabilities (LLM, data.*, web.search, files.read, task.*, optional cli.*).                   |
+| `apps/api/src/mcp_client.py`        | Stdio MCP-client manager. Auto-registers each MCP tool as `mcp.<alias>.<name>`.                        |
+| `apps/api/src/openapi_adapter.py`   | Loads any OpenAPI 3.x spec, exposes every operation as `openapi.<alias>.<op>`.                         |
+| `apps/api/src/narrator.py`          | Turns raw events into single-sentence human commentary (`narration` events).                           |
+| `apps/api/src/tasks.py`             | Domain model: Thread → Turn → events / state / files.                                                  |
+| `apps/api/src/persistence.py`       | SQLite store with hydration on boot.                                                                   |
+| `apps/api/src/audit.py`             | Append-only audit of tool calls and approvals.                                                         |
+| `apps/web/src/App.tsx · Turn.tsx`   | Threaded workspace, composer with file attachments, plan-steering, regenerate.                         |
+| `apps/web/src/bridge.ts`            | Per-turn iframe ↔ backend bridge.                                                                      |
+
+---
+
+## The interaction model
+
+<div align="center">
+  <img src="./assets/screenshot-landing.svg" alt="Morphic landing screen" width="100%"/>
+</div>
+
+- **Threaded workspace.** Each user message is a *turn*; Morphic's reply
+  is `plan card → generated iframe → live narration → final result`.
+  Old turns auto-collapse so the active one stays in focus.
+- **Plan steering.** Before codegen burns tokens you see the planned
+  presentation_mode + visual_concept + steps + tool list. Decide:
+  Proceed · Cancel.
+- **Refine + regenerate.** Don't like the visual? Click `Refine…`, type
+  *"warmer palette, denser table, add export button"*, and Morphic
+  regenerates the document keeping the metaphor.
+- **File attachments.** Upload from the composer; available inside the
+  iframe via `await agui.readFile(id)`.
+- **Cancel anytime.** Hard cancel signals release pending approvals,
+  stop the pipeline, and persist the cancelled state.
+- **Inspector.** Per-turn raw event stream + token usage, hidden by
+  default for non-developers.
+
+---
+
+## Bridge API (inside the generated UI)
 
 ```js
 agui.plan, agui.tools, agui.goal, agui.taskId, agui.files
@@ -104,27 +126,85 @@ agui.toast(message, kind)
 agui.onEvent(handler)
 ```
 
-Sandbox: `allow-scripts` only, **no** `allow-same-origin`, **no** network.
-The bridge is the only way out of the iframe.
+Sandbox is `allow-scripts` only — **no** `allow-same-origin`, **no**
+network, **no** parent DOM access. The bridge is the only escape hatch.
 
-## MCP servers
+---
 
-Create `.agui/mcp.json`:
+## Quickstart
+
+```bash
+git clone https://github.com/pavelbar137-lang/agui.git morphic
+cd morphic
+cp .env.example .env   # put your provider key in AGUI_LLM_API_KEY
+
+# backend
+cd apps/api
+python -m venv .venv && . .venv/bin/activate
+pip install -e .
+uvicorn src.main:app --reload --port 8001
+
+# frontend (separate terminal)
+cd apps/web
+npm install
+npm run dev
+```
+
+Open <http://localhost:5173>. Vite proxies `/api` → `http://localhost:8001`.
+
+Or with Docker:
+
+```bash
+docker compose up --build api web                  # dev (web :5173, api :8001)
+docker build --target production -t morphic .      # prod single-image (nginx + uvicorn)
+```
+
+---
+
+## Provider configuration
+
+Morphic is provider-agnostic. Pick the protocol your provider speaks:
+
+| Var                   | Default                              | Notes                                  |
+|-----------------------|--------------------------------------|----------------------------------------|
+| `AGUI_LLM_PROTOCOL`   | `anthropic`                          | `anthropic` (Messages) or `openai`     |
+| `AGUI_LLM_BASE_URL`   | `https://api.minimax.io/anthropic`   | Provider base URL.                     |
+| `AGUI_LLM_MODEL`      | `MiniMax-M2`                         | Model id.                              |
+| `AGUI_LLM_API_KEY`    | —                                    | API key.                               |
+| `AGUI_LLM_MAX_TOKENS` | `4096`                               |                                        |
+| `AGUI_LLM_TEMPERATURE`| `0.6`                                |                                        |
+| `TAVILY_API_KEY`      | —                                    | Real `web.search` if set.              |
+| `AGUI_MCP_CONFIG`     | `.agui/mcp.json`                     | Optional MCP server config.            |
+| `AGUI_DATA_DIR`       | `.agui-data`                         | SQLite + uploads live here.            |
+| `AGUI_ENABLE_CLI`     | unset                                | Enables `cli.*` host-CLI tools.        |
+| `AGUI_CLI_ALLOWLIST`  | unset                                | Optional `:`-separated allowlist.      |
+
+> Default is **MiniMax M2** via its Anthropic-compatible endpoint. Switch to
+> OpenAI / Groq / OpenRouter / Together by changing the four `AGUI_LLM_*`
+> vars — no SDK changes required.
+
+---
+
+## Tool discovery
+
+### MCP servers
+
+Drop a `.agui/mcp.json` at repo root:
 
 ```json
 {
   "servers": [
-    { "alias": "fs",  "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"] },
-    { "alias": "git", "command": "uvx", "args": ["mcp-server-git", "--repository", "."] }
+    { "alias": "fs",   "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"] },
+    { "alias": "git",  "command": "uvx", "args": ["mcp-server-git", "--repository", "."] }
   ]
 }
 ```
 
-On boot AGUI spawns each server, calls `tools/list`, and registers every
-exposed tool as `mcp.<alias>.<tool>` in the AGUI Tool Registry —
-immediately usable from any generated UI.
+On boot Morphic spawns each server, calls `tools/list`, and registers
+every tool as `mcp.<alias>.<name>` — immediately callable from any
+generated UI via `agui.callTool(...)`.
 
-## OpenAPI
+### OpenAPI
 
 ```bash
 curl -X POST http://localhost:8001/api/tools/openapi -H 'content-type: application/json' -d '{
@@ -136,28 +216,15 @@ curl -X POST http://localhost:8001/api/tools/openapi -H 'content-type: applicati
 }'
 ```
 
-Every operation becomes a callable tool.
+Every operation becomes a callable tool: `openapi.petstore.findPetsByStatus`, etc.
 
-## Run locally
+### Host CLI tools
 
-```bash
-cp .env.example .env  # put your key in AGUI_LLM_API_KEY
+Set `AGUI_ENABLE_CLI=1` and optional `AGUI_CLI_ALLOWLIST=git:gh:jq`.
+A curated set of common binaries (`git`, `gh`, `curl`, `jq`, `docker`,
+`kubectl`, …) becomes available as `cli.<name>` tools, gated by approval.
 
-# backend
-cd apps/api && python -m venv .venv && . .venv/bin/activate \
-  && pip install -e . && uvicorn src.main:app --reload --port 8001
-# frontend (separate terminal)
-cd apps/web && npm install && npm run dev
-```
-
-Open <http://localhost:5173>. Vite proxies `/api` → `http://localhost:8001`.
-
-Docker:
-
-```bash
-docker compose up --build api web                   # dev (web :5173, api :8001)
-docker build --target production -t agui .          # prod single-image (nginx + uvicorn)
-```
+---
 
 ## Endpoints
 
@@ -174,8 +241,27 @@ docker build --target production -t agui .          # prod single-image (nginx +
 | POST   | `/api/turns/{tid}/approve`                 | Resolve a pending approval               |
 | POST   | `/api/turns/{tid}/proceed`                 | Proceed past plan steering               |
 | POST   | `/api/turns/{tid}/cancel`                  | Cancel a turn                            |
+| POST   | `/api/turns/{tid}/regenerate`              | Re-run codegen, optional `refine_note`   |
 | POST   | `/api/files`                               | Upload a file                            |
 | GET    | `/api/files/{fid}`                         | Download                                 |
 | GET    | `/api/tools`                               | Registered tools                         |
 | POST   | `/api/tools/openapi`                       | Register an OpenAPI spec                 |
 | GET    | `/api/audit?turn_id=&limit=`               | Audit tail                               |
+
+---
+
+## Roadmap
+
+- [ ] HTTP/SSE transport for MCP (right now: stdio only)
+- [ ] LLM router for "refine current turn vs. open a new turn" decision
+- [ ] Streaming partial codegen (show the document being drawn)
+- [ ] Cost dashboard + per-tool latency
+- [ ] Saved presets per organization (palette / typography defaults)
+
+---
+
+<div align="center">
+  <sub>
+    Morphic · MIT · the interface takes the shape of the task
+  </sub>
+</div>

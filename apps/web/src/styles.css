@@ -10,8 +10,9 @@
   --fg: #e7ebf3;
   --fg-2: #9aa3b2;
   --fg-3: #6b7280;
-  --accent: #7aa2ff;
-  --accent-2: #3b6dff;
+  --accent: #7C5CFF;
+  --accent-2: #5B3BFF;
+  --accent-warm: #FF8A5C;
   --good: #5bd29a;
   --bad: #ff7a8a;
   --warn: #ffc36b;
@@ -53,13 +54,10 @@ input, textarea, button { font: inherit; color: inherit; }
   z-index: 10;
 }
 .brand { display: flex; align-items: center; gap: 10px; }
-.brand .dot {
-  width: 10px; height: 10px; border-radius: 50%;
-  background: radial-gradient(circle, var(--accent), var(--accent-2) 70%, transparent 100%);
-  box-shadow: 0 0 16px rgba(122,162,255,.6);
-}
-.brand-name { font-weight: 600; letter-spacing: .04em; }
+.brand-mark { width: 22px; height: 22px; flex: 0 0 auto; filter: drop-shadow(0 0 8px rgba(124,92,255,.45)); }
+.brand-name { font-weight: 600; letter-spacing: -0.01em; font-size: 16px; }
 .brand-sub { color: var(--fg-3); font-size: 12px; }
+@media (max-width: 640px) { .brand-sub { display: none; } }
 .top-right { display: flex; align-items: center; gap: 8px; position: relative; }
 
 .threads-menu { position: relative; }
@@ -271,6 +269,50 @@ label.file-btn:hover { color: var(--fg); border-color: var(--line-2); }
 .steer-prompt { color: var(--fg-2); font-size: 13px; margin-right: auto; }
 
 .plan-card.plan-collapsed .plan-h .plan-concept { opacity: .7; }
+
+.plan-regen {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+}
+.refine-row { display: flex; gap: 6px; align-items: center; flex: 1; }
+.refine-input {
+  flex: 1; min-width: 220px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 10px;
+  color: var(--fg);
+  outline: none;
+  font-size: 12.5px;
+}
+.refine-input:focus { border-color: var(--line-2); box-shadow: 0 0 0 3px rgba(124,92,255,.16); }
+
+.stage-restore {
+  align-self: flex-start;
+  background: var(--panel);
+  border: 1px dashed var(--line);
+  color: var(--fg-2);
+  border-radius: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.stage-restore:hover { color: var(--fg); border-color: var(--line-2); }
+.stage-wrap { position: relative; }
+.stage-hide {
+  position: absolute; top: 8px; right: 8px; z-index: 2;
+  width: 26px; height: 26px;
+  background: rgba(0,0,0,.4);
+  color: var(--fg-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 14px; line-height: 1;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.stage-hide:hover { color: var(--fg); }
 
 /* --- stage / iframe --- */
 .stage-wrap {

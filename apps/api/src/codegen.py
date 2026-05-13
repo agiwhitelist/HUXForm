@@ -134,6 +134,8 @@ class UIGenerator:
         goal: str,
         plan: TaskPlan,
         files: list[dict] | None = None,
+        refine_note: str | None = None,
+        previous_html: str | None = None,
     ) -> tuple[str, dict]:
         brief = plan.visual_brief
         if brief is None:
@@ -173,12 +175,29 @@ class UIGenerator:
             "files": files or [],
             "tools": self.registry.bridge_schema(),
         }
-        user_msg = (
+        instruction = (
             "Build the AGUI experience for this task.\n\n"
-            "```json\n" + json.dumps(user_payload, ensure_ascii=False, indent=2) + "\n```\n\n"
-            "Implement the visual brief literally. Do not fall back to a generic dark "
+            "```json\n" + json.dumps(user_payload, ensure_ascii=False, indent=2) + "\n```\n"
+        )
+        if refine_note:
+            instruction += (
+                "\nThis is a REGENERATION. The previous interface existed but the "
+                "human asked for the following refinement — apply it without losing the "
+                "metaphor, and produce a fresh complete document:\n\n"
+                f"---\n{refine_note}\n---\n"
+            )
+        if previous_html and refine_note:
+            preview = previous_html[:2400]
+            instruction += (
+                "\nHere is the start of the previous document for context (do NOT just "
+                "copy it — reinterpret it through the refinement note):\n\n"
+                f"```html\n{preview}\n```\n"
+            )
+        instruction += (
+            "\nImplement the visual brief literally. Do not fall back to a generic dark "
             "card-grid dashboard. Return the full HTML document now."
         )
+        user_msg = instruction
         reply = await self.llm.complete(
             system=system,
             messages=[{"role": "user", "content": user_msg}],

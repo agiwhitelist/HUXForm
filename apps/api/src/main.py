@@ -158,6 +158,10 @@ class ApprovalBody(BaseModel):
     approved: bool
 
 
+class RegenerateBody(BaseModel):
+    refine_note: str | None = None
+
+
 class OpenAPIRegisterBody(BaseModel):
     alias: str
     spec_url: str
@@ -383,6 +387,18 @@ async def cancel_turn(turn_id: str, request: Request) -> dict[str, Any]:
     return {"ok": True}
 
 
+@app.post("/api/turns/{turn_id}/regenerate")
+async def regenerate_turn(turn_id: str, body: RegenerateBody, request: Request) -> dict[str, Any]:
+    state = request.app.state
+    turn = state.registry.get_turn(turn_id)
+    if turn is None:
+        raise HTTPException(404, "turn not found")
+    if turn.plan is None:
+        raise HTTPException(409, "turn has no plan to regenerate from")
+    asyncio.create_task(_regenerate_turn(turn, state, body.refine_note))
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------------------
 # Files
 # ---------------------------------------------------------------------------
@@ -504,6 +520,36 @@ async def _drive_turn(turn: Turn, state: Any) -> None:
             await persistence.save_turn(turn)
         except Exception:
             pass
+
+
+async def _regenerate_turn(turn: Turn, state: Any, refine_note: str | None) -> None:
+    persistence: Persistence = state.persistence
+    registry: Registry = state.registry
+    try:
+        previous_html = turn.html
+        turn.status = "generating"
+        turn.emit({"type": "regenerating", "refine_note": refine_note})
+        attached = [registry.get_file(fid).to_public() for fid in turn.file_ids if registry.get_file(fid)]
+        html, usage = await state.codegen.generate(
+            goal=turn.user_message,
+            plan=turn.plan,
+            files=attached,
+            refine_note=refine_note,
+            previous_html=previous_html,
+        )
+        turn.html = html
+        for k, v in (usage or {}).items():
+            try:
+                turn.usage[k] = turn.usage.get(k, 0) + int(v)
+            except (TypeError, ValueError):
+                pass
+        turn.emit({"type": "ui_ready", "bytes": len(html), "regenerated": True})
+        turn.status = "running"
+        turn.emit({"type": "running"})
+        await persistence.save_turn(turn)
+    except Exception as exc:
+        log.exception("regenerate failed")
+        turn.emit({"type": "tool_error", "tool": "regenerate", "message": str(exc)})
 
 
 def _summarize_prior_turns(prior: list[Turn]) -> str | None:
