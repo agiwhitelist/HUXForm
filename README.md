@@ -47,22 +47,22 @@ moment.
   <table>
     <tr>
       <td align="center" width="50%">
-        <img src="./assets/shot-explainer.png" alt="Museum specimen card explainer" width="100%"/>
-        <sub><b>explainer · technical specimen card</b><br/>"explain what MCP is" — cream parchment, serif display, taxonomy ledger</sub>
+        <img src="./assets/shot-weather.png" alt="Meteorological station readout" width="100%"/>
+        <sub><b>status_view · meteorological station readout</b><br/>"what's the weather in New York?" — cold observatory palette, METAR string</sub>
       </td>
       <td align="center" width="50%">
-        <img src="./assets/shot-stage.png" alt="Payment system specimen cabinet" width="100%"/>
-        <sub><b>decision_board · payment specimen cabinet</b><br/>"compare three payment processors" — side-by-side cards, real data</sub>
+        <img src="./assets/shot-mcp.png" alt="MCP technical manual" width="100%"/>
+        <sub><b>explainer · technical manual</b><br/>"explain Model Context Protocol" — paper specimen, justified spec text</sub>
       </td>
     </tr>
     <tr>
       <td align="center" width="50%">
-        <img src="./assets/shot-csv.png" alt="Specimen sorting bench for CSV dedup" width="100%"/>
-        <sub><b>generated_app · specimen sorting bench</b><br/>"check this CSV for duplicates" — working drop-zone bound to the tool broker</sub>
+        <img src="./assets/shot-payments.png" alt="Payment processor scorecard" width="100%"/>
+        <sub><b>decision_board · processor scorecard</b><br/>"compare payment processors" — feature matrix, scores, per-row verdicts</sub>
       </td>
       <td align="center" width="50%">
-        <img src="./assets/shot-landing.png" alt="HUXForm landing" width="100%"/>
-        <sub><b>landing · the moment of stillness</b><br/>one prompt, rotating hint, no chat history, no dashboard chrome</sub>
+        <img src="./assets/shot-csv.png" alt="Duplicate forensics bench" width="100%"/>
+        <sub><b>generated_app · duplicate forensics bench</b><br/>"find duplicates in this CSV" — real drop-zone bound to the tool broker</sub>
       </td>
     </tr>
   </table>
@@ -75,7 +75,7 @@ Same runtime, four completely different surfaces — picked and built per task.
 ## Quick start
 
 Clone the repo and run one script. It checks your Python and Node versions,
-creates a virtualenv, installs dependencies, prompts for your MiniMax key
+creates a virtualenv, installs dependencies, prompts for your Anthropic key
 (or any Anthropic-compatible / OpenAI-compatible key), starts both servers
 and opens your browser.
 
@@ -103,7 +103,7 @@ That's it. The script does the rest:
 
   setup
   ✓  python3 / node / npm preflight
-  paste your MiniMax API key  ⟶  ······
+  paste your Anthropic API key  ⟶  ······
   ✓  wrote .env
   api · creating Python venv
   api · installing dependencies
@@ -127,11 +127,11 @@ skipped automatically.
 | Python       | 3.11+   | `python3 --version` |
 | Node.js      | 20+     | `node --version` |
 | npm          | 10+     | bundled with Node |
-| An LLM key   | —       | MiniMax M2 by default; or any Anthropic / OpenAI-compatible endpoint |
+| An LLM key   | —       | Anthropic Claude Opus 4.7 by default; or any Anthropic / OpenAI-compatible endpoint |
 
-You can grab a free MiniMax key in five minutes at
-[platform.minimax.io](https://platform.minimax.io/). To switch providers,
-edit `.env` after first run (see [Provider configuration](#provider-configuration)).
+Get a key from [console.anthropic.com](https://console.anthropic.com/). To
+switch to MiniMax, OpenAI, OpenRouter, Groq, Together, Ollama or any other
+provider, edit `.env` after first run (see [Provider configuration](#provider-configuration)).
 
 ### Other ways to run
 
@@ -225,8 +225,8 @@ HUXForm is provider-agnostic. Pick the protocol your provider speaks:
 | Var                   | Default                              | Notes                                  |
 |-----------------------|--------------------------------------|----------------------------------------|
 | `AGUI_LLM_PROTOCOL`   | `anthropic`                          | `anthropic` (Messages) or `openai`     |
-| `AGUI_LLM_BASE_URL`   | `https://api.minimax.io/anthropic`   | Provider base URL.                     |
-| `AGUI_LLM_MODEL`      | `MiniMax-M2`                         | Model id.                              |
+| `AGUI_LLM_BASE_URL`   | `https://api.anthropic.com`          | Provider base URL.                     |
+| `AGUI_LLM_MODEL`      | `claude-opus-4-7`                    | Model id.                              |
 | `AGUI_LLM_API_KEY`    | —                                    | API key.                               |
 | `AGUI_LLM_MAX_TOKENS` | `4096`                               |                                        |
 | `AGUI_LLM_TEMPERATURE`| `0.6`                                |                                        |
@@ -236,9 +236,9 @@ HUXForm is provider-agnostic. Pick the protocol your provider speaks:
 | `AGUI_ENABLE_CLI`     | unset                                | Enables `cli.*` host-CLI tools.        |
 | `AGUI_CLI_ALLOWLIST`  | unset                                | Optional `:`-separated allowlist.      |
 
-> Default is **MiniMax M2** via its Anthropic-compatible endpoint. Switch to
-> Anthropic / OpenAI / Groq / OpenRouter / Together / Ollama by changing the
-> four `AGUI_LLM_*` vars — no SDK changes required.
+> Default is **Anthropic Claude Opus 4.7**. Switch to MiniMax, OpenAI, Groq,
+> OpenRouter, Together or Ollama by changing the four `AGUI_LLM_*` vars —
+> no SDK changes required.
 
 ---
 

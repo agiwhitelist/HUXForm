@@ -15,6 +15,20 @@ dist/
 .omc/
 test-dupes.csv
 apps/web/test-dupes.csv
+idea.md
+
+# Dev screenshots from playwright runs (keep curated ones in assets/)
+/shot-*.png
+/page-*.png
+/landing-*.png
+/payment-*.png
+/csv-*.png
+/stage-*.png
+/sessions-*.png
+/huxform-*.png
+/page-hero.png
+/page-manifesto.png
+/page-cabinet.png
 .huxform-api.log
 .huxform-web.log
 *.log

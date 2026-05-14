@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HUXForm — the interface takes the shape of the task</title>
+<meta name="description" content="HUXForm is a generative human-experience runtime for AI agents. Describe a task in plain language — HUXForm builds a one-off mini-app for it, on the fly, in a sandboxed stage." />
+<meta name="theme-color" content="#07080a" />
+<meta property="og:title" content="HUXForm — the interface takes the shape of the task" />
+<meta property="og:description" content="A generative human-experience runtime for AI agents. Every task gets its own interface." />
+<meta property="og:image" content="./assets/banner.svg" />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://agiwhitelist.github.io/HUXForm/" />
+<meta name="twitter:card" content="summary_large_image" />
+
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64' fill='none' stroke='%23e8633a' stroke-width='3'><rect x='14' y='14' width='36' height='36' transform='rotate(45 32 32)'/><line x1='32' y1='8' x2='32' y2='56'/></svg>" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500&family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+
+<style>
+  :root{
+    --ink:#ece8dd; --ink-soft:#b9b3a3; --ink-dim:#75716a; --ink-faint:#3d3b36;
+    --ground:#07080a; --ground-2:#0c0e11; --ground-3:#11141a; --hairline:#1a1d24;
+    --signal:#e8633a; --signal-2:#f3a06b; --good:#87b178; --warn:#d6a04c; --bad:#c2553a;
+    --serif:"Fraunces","GT Sectra",Georgia,"Times New Roman",serif;
+    --sans:"Inter Tight",ui-sans-serif,system-ui,-apple-system,sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --task-bg:var(--ground); --task-ink:var(--ink); --task-accent:var(--signal);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;font-feature-settings:"ss01","cv11";scroll-behavior:smooth}
+  ::selection{background:var(--signal);color:var(--ground)}
+  a{color:inherit;text-decoration:none}
+  a:hover{color:var(--signal)}
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+  img,svg{display:block;max-width:100%}
+
+  /* Ambient noise */
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;background-image:radial-gradient(rgba(255,255,255,.013) 1px,transparent 1px);background-size:3px 3px;z-index:1;mix-blend-mode:overlay}
+
+  /* Top sigil bar */
+  .topbar{position:fixed;top:0;left:0;right:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:18px 28px;background:linear-gradient(180deg,rgba(7,8,10,.92),rgba(7,8,10,0));backdrop-filter:blur(8px)}
+  .brand{display:flex;align-items:center;gap:10px;user-select:none}
+  .brand-mark{position:relative;width:16px;height:16px;border:1px solid var(--ink);transform:rotate(45deg)}
+  .brand-mark::after{content:"";position:absolute;left:50%;top:-3px;bottom:-3px;width:1px;background:var(--ink);transform:translateX(-50%)}
+  .brand-name{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.22em;color:var(--ink);text-transform:uppercase}
+  .brand-tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;color:var(--ink-dim);text-transform:uppercase}
+  .nav{display:flex;gap:24px}
+  .nav a{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;color:var(--ink-dim);text-transform:uppercase;transition:color .2s}
+  .nav a:hover{color:var(--ink)}
+  .nav .cta{color:var(--signal);border:1px solid var(--ink-faint);padding:8px 14px;transition:border-color .2s}
+  .nav .cta:hover{border-color:var(--signal)}
+
+  section{position:relative;padding:120px 28px;z-index:2}
+  .wrap{max-width:1200px;margin:0 auto}
+
+  /* ---- HERO ---- */
+  .hero{min-height:100vh;display:grid;place-items:center;padding-top:80px;padding-bottom:60px;position:relative;overflow:hidden}
+  .hero::before{content:"";position:absolute;inset:0;background:radial-gradient(900px 600px at 80% -10%,rgba(232,99,58,.10),transparent 60%),radial-gradient(900px 600px at -10% 110%,rgba(135,177,120,.04),transparent 60%);pointer-events:none}
+  .hero-inner{width:min(960px,100%);text-align:left;position:relative}
+  .hero-eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.24em;color:var(--ink-dim);text-transform:uppercase;display:flex;align-items:center;gap:14px;margin-bottom:36px}
+  .hero-eyebrow::after{content:"";flex:1;height:1px;background:var(--hairline)}
+  .hero h1{font-family:var(--serif);font-weight:300;font-style:italic;font-size:clamp(46px,8vw,108px);line-height:1.02;letter-spacing:-.02em;margin-bottom:32px}
+  .hero h1 em{font-style:normal;color:var(--signal)}
+  .hero h1 .verb{display:inline-block;animation:verbReveal 700ms cubic-bezier(.22,1,.36,1) both}
+  @keyframes verbReveal{from{opacity:0;transform:translateY(.4em);filter:blur(4px)}to{opacity:1;transform:none;filter:blur(0)}}
+  .hero-sub{max-width:62ch;font-size:17px;line-height:1.6;color:var(--ink-soft);margin-bottom:48px}
+  .hero-cta{display:flex;flex-wrap:wrap;gap:16px;align-items:center}
+  .pri{display:inline-flex;align-items:center;gap:10px;background:var(--signal);color:var(--ground);padding:14px 22px;font-family:var(--mono);font-size:11.5px;letter-spacing:.18em;text-transform:uppercase;transition:background .15s,transform .15s}
+  .pri:hover{background:var(--signal-2);color:var(--ground);transform:translateY(-1px)}
+  .sec{display:inline-flex;align-items:center;gap:10px;padding:14px 22px;border:1px solid var(--ink-faint);font-family:var(--mono);font-size:11.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);transition:border-color .15s,color .15s}
+  .sec:hover{border-color:var(--ink-soft);color:var(--ink)}
+  .hero-scroll{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:10.5px;letter-spacing:.24em;color:var(--ink-dim);text-transform:uppercase;display:flex;flex-direction:column;align-items:center;gap:10px}
+  .hero-scroll::after{content:"";width:1px;height:32px;background:linear-gradient(180deg,var(--ink-dim),transparent);animation:scrollDown 2.2s ease-in-out infinite}
+  @keyframes scrollDown{0%,100%{opacity:.4;transform:translateY(0)}50%{opacity:1;transform:translateY(8px)}}
+
+  /* ---- MANIFESTO ---- */
+  .manifesto{padding:160px 28px}
+  .manifesto-grid{display:grid;grid-template-columns:1fr 1fr;gap:80px;align-items:start}
+  .manifesto h2{font-family:var(--serif);font-style:italic;font-weight:300;font-size:clamp(36px,4.5vw,56px);line-height:1.1;letter-spacing:-.015em;margin-bottom:24px;max-width:14ch}
+  .manifesto h2 em{font-style:normal;color:var(--signal)}
+  .manifesto p{color:var(--ink-soft);font-size:16px;line-height:1.7;margin-bottom:18px;max-width:54ch}
+  .vs{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline)}
+  .vs-col{padding:28px;border-right:1px solid var(--hairline)}
+  .vs-col:last-child{border-right:0;background:linear-gradient(180deg,rgba(232,99,58,.03),transparent)}
+  .vs-eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.24em;color:var(--ink-dim);text-transform:uppercase;margin-bottom:16px}
+  .vs-eyebrow.signal{color:var(--signal)}
+  .vs-h{font-family:var(--serif);font-style:italic;font-weight:300;font-size:24px;line-height:1.3;color:var(--ink);margin-bottom:14px}
+  .vs-doodle{margin-top:18px}
+
+  /* ---- CABINET ---- */
+  .cabinet{padding:120px 28px;background:linear-gradient(180deg,transparent,rgba(255,255,255,.012),transparent)}
+  .cabinet-h{margin-bottom:48px;max-width:680px}
+  .cabinet-eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.24em;color:var(--signal);text-transform:uppercase;margin-bottom:18px;display:flex;align-items:center;gap:14px}
+  .cabinet-eyebrow::after{content:"";flex:1;height:1px;background:var(--hairline)}
+  .cabinet h2{font-family:var(--serif);font-style:italic;font-weight:300;font-size:clamp(36px,4.5vw,56px);line-height:1.1;letter-spacing:-.015em;margin-bottom:18px}
+  .cabinet h2 em{font-style:normal;color:var(--signal)}
+  .cabinet-lede{color:var(--ink-soft);font-size:16px;line-height:1.7;max-width:62ch}
+
+  .specimens{display:grid;grid-template-columns:repeat(2,1fr);gap:24px}
+  .specimen{position:relative;border:1px solid var(--hairline);background:var(--ground-2);overflow:hidden;cursor:pointer;transition:border-color .2s,transform .2s;display:flex;flex-direction:column}
+  .specimen:hover{border-color:var(--ink-soft);transform:translateY(-2px)}
+  .specimen-h{padding:18px 22px;display:flex;align-items:baseline;justify-content:space-between;border-bottom:1px solid var(--hairline)}
+  .specimen-no{font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;color:var(--ink-dim);text-transform:uppercase}
+  .specimen-mode{font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;color:var(--signal);text-transform:uppercase}
+  .specimen-prompt{padding:22px;font-family:var(--serif);font-style:italic;font-weight:300;font-size:22px;color:var(--ink);line-height:1.35}
+  .specimen-arrow{padding:0 22px 18px;font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;color:var(--ink-dim);text-transform:uppercase;display:flex;align-items:center;gap:10px}
+  .specimen-arrow::after{content:"⟶";color:var(--signal)}
+  .specimen-shape{padding:0;background:var(--ground-3);min-height:240px;display:flex;align-items:stretch;justify-content:center;border-top:1px solid var(--hairline);overflow:hidden}
+  .specimen-shape svg{width:100%;height:auto;max-height:260px;padding:22px}
+  .specimen-shape img{width:100%;height:auto;object-fit:cover;object-position:center top;max-height:320px;display:block}
+  .specimen-foot{padding:14px 22px;font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-dim);text-transform:uppercase;border-top:1px solid var(--hairline);display:flex;justify-content:space-between;align-items:center}
+  .specimen-foot .swatches{display:flex;gap:0}
+  .specimen-foot .swatches span{width:18px;height:6px}
+
+  /* ---- ARCH ---- */
+  .arch{padding:160px 28px}
+  .arch-h{margin-bottom:48px}
+  .arch h2{font-family:var(--serif);font-style:italic;font-weight:300;font-size:clamp(36px,4.5vw,56px);line-height:1.1;letter-spacing:-.015em;margin-bottom:18px}
+  .arch h2 em{font-style:normal;color:var(--signal)}
+  .arch-lede{color:var(--ink-soft);font-size:16px;line-height:1.7;max-width:62ch}
+  .arch-img{margin-top:48px;border:1px solid var(--hairline);background:var(--ground-2);padding:24px}
+  .arch-img img{width:100%;height:auto}
+
+  /* ---- START ---- */
+  .start{padding:120px 28px;background:linear-gradient(180deg,transparent,rgba(232,99,58,.04),transparent)}
+  .start-grid{display:grid;grid-template-columns:1.1fr 1fr;gap:60px;align-items:start}
+  .start h2{font-family:var(--serif);font-style:italic;font-weight:300;font-size:clamp(36px,4.5vw,56px);line-height:1.1;letter-spacing:-.015em;margin-bottom:18px}
+  .start h2 em{font-style:normal;color:var(--signal)}
+  .start-lede{color:var(--ink-soft);font-size:16px;line-height:1.7;max-width:54ch;margin-bottom:32px}
+  .terminal{background:#06070a;border:1px solid var(--hairline);font-family:var(--mono);font-size:13px;color:var(--ink-soft);position:relative;overflow:hidden}
+  .terminal-h{padding:10px 16px;border-bottom:1px solid var(--hairline);display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10px;letter-spacing:.22em;color:var(--ink-dim);text-transform:uppercase}
+  .terminal-h::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--signal)}
+  .terminal-body{padding:20px;line-height:1.7}
+  .terminal-body .prompt{color:var(--signal);user-select:none}
+  .terminal-body .cmd{color:var(--ink)}
+  .terminal-body .comment{color:var(--ink-dim)}
+  .copy-btn{position:absolute;top:10px;right:10px;font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-dim);text-transform:uppercase;padding:6px 12px;border:1px solid var(--ink-faint);background:var(--ground-2);transition:color .15s,border-color .15s}
+  .copy-btn:hover{color:var(--signal);border-color:var(--signal)}
+  .copy-btn.copied{color:var(--good);border-color:var(--good)}
+  .stack{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}
+  .stack span{font-family:var(--mono);font-size:11px;letter-spacing:.16em;color:var(--ink-soft);text-transform:uppercase;padding:6px 11px;border:1px solid var(--hairline)}
+
+  /* ---- BRIDGE ---- */
+  .bridge{padding:120px 28px}
+  .bridge h2{font-family:var(--serif);font-style:italic;font-weight:300;font-size:clamp(36px,4.5vw,56px);line-height:1.1;letter-spacing:-.015em;margin-bottom:18px;max-width:18ch}
+  .bridge h2 em{font-style:normal;color:var(--signal)}
+  .bridge-lede{color:var(--ink-soft);font-size:16px;line-height:1.7;max-width:62ch;margin-bottom:32px}
+  .code{background:#06070a;border:1px solid var(--hairline);padding:24px;font-family:var(--mono);font-size:13px;line-height:1.7;color:var(--ink-soft);overflow-x:auto}
+  .code .k{color:var(--signal)}
+  .code .c{color:var(--ink-dim)}
+  .code .v{color:var(--good)}
+  .code .s{color:var(--warn)}
+
+  /* ---- FOOTER ---- */
+  footer{padding:120px 28px 60px;border-top:1px solid var(--hairline);text-align:center}
+  footer h3{font-family:var(--serif);font-style:italic;font-weight:300;font-size:clamp(42px,5vw,72px);line-height:1.05;letter-spacing:-.015em;margin-bottom:20px}
+  footer h3 em{font-style:normal;color:var(--signal)}
+  footer .ftr-sub{color:var(--ink-soft);font-size:16px;line-height:1.6;max-width:54ch;margin:0 auto 36px}
+  footer .ftr-links{display:flex;gap:18px;justify-content:center;margin-bottom:48px;flex-wrap:wrap}
+  footer .ftr-end{font-family:var(--mono);font-size:10.5px;letter-spacing:.24em;color:var(--ink-dim);text-transform:uppercase}
+
+  @media (max-width:780px){
+    .manifesto-grid{grid-template-columns:1fr;gap:48px}
+    .vs{grid-template-columns:1fr}
+    .vs-col{border-right:0;border-bottom:1px solid var(--hairline)}
+    .specimens{grid-template-columns:1fr}
+    .start-grid{grid-template-columns:1fr;gap:40px}
+    .nav{display:none}
+  }
+</style>
+</head>
+
+<body>
+
+<header class="topbar">
+  <a href="#top" class="brand">
+    <span class="brand-mark"></span>
+    <span class="brand-name">HUXForm</span>
+    <span class="brand-tag">— generative human-experience runtime</span>
+  </a>
+  <nav class="nav">
+    <a href="#manifesto">the idea</a>
+    <a href="#cabinet">demo</a>
+    <a href="#arch">architecture</a>
+    <a href="#start">start</a>
+    <a href="https://github.com/agiwhitelist/HUXForm" class="cta">github ↗</a>
+  </nav>
+</header>
+
+<!-- ─────────────────────────────── HERO ─────────────────────────────── -->
+<section class="hero" id="top">
+  <div class="hero-inner">
+    <div class="hero-eyebrow"><span>v0.3 · public beta · MIT</span></div>
+    <h1>
+      What should the&nbsp;<em>interface</em>&nbsp;
+      <span class="verb" id="hero-verb">look like</span>&nbsp;today?
+    </h1>
+    <p class="hero-sub">
+      HUXForm is a generative human-experience runtime for AI agents.
+      Describe a task in plain language. HUXForm directs a one-off
+      visual concept for it, generates a self-contained mini-app on the
+      fly, and runs it in a sandboxed stage that talks back through a
+      safe bridge.
+    </p>
+    <div class="hero-cta">
+      <a href="#start" class="pri">begin in one command ↵</a>
+      <a href="#cabinet" class="sec">see what it builds</a>
+    </div>
+  </div>
+  <div class="hero-scroll">scroll</div>
+</section>
+
+<!-- ────────────────────────── MANIFESTO ────────────────────────── -->
+<section class="manifesto" id="manifesto">
+  <div class="wrap manifesto-grid">
+    <div>
+      <h2>Every other AI app sends you back a&nbsp;<em>paragraph</em>.</h2>
+      <p>We send you back a piece of software built for one moment.</p>
+      <p>Three columns of dark cards, sidebar, hamburger, glassmorphism — that's the cul-de-sac most LLM UIs end up in. HUXForm fights it in two places: a Director that commits to a concrete metaphor, palette and typography <em>before</em> any code is written, and a UI Generator that treats that brief as a constraint, not a suggestion.</p>
+      <p>The shell itself dissolves while you work. When a task is on stage, chrome auto-fades, the palette of the generated app bleeds into the surrounding frame, and the only thing on screen is the mini-app HUXForm built for <em>this</em> moment.</p>
+    </div>
+    <div class="vs">
+      <div class="vs-col">
+        <div class="vs-eyebrow">before</div>
+        <div class="vs-h">A chat bubble with seven&nbsp;paragraphs.</div>
+        <svg class="vs-doodle" viewBox="0 0 320 200" fill="none">
+          <rect x="0" y="0" width="320" height="200" stroke="#1a1d24"/>
+          <rect x="16" y="20" width="200" height="14" fill="#3d3b36"/>
+          <rect x="16" y="42" width="270" height="6" fill="#1a1d24"/>
+          <rect x="16" y="54" width="240" height="6" fill="#1a1d24"/>
+          <rect x="16" y="66" width="260" height="6" fill="#1a1d24"/>
+          <rect x="16" y="78" width="200" height="6" fill="#1a1d24"/>
+          <rect x="16" y="100" width="270" height="6" fill="#1a1d24"/>
+          <rect x="16" y="112" width="240" height="6" fill="#1a1d24"/>
+          <rect x="16" y="124" width="200" height="6" fill="#1a1d24"/>
+          <rect x="16" y="146" width="270" height="6" fill="#1a1d24"/>
+          <rect x="16" y="158" width="160" height="6" fill="#1a1d24"/>
+          <rect x="240" y="178" width="64" height="12" fill="#1a1d24"/>
+        </svg>
+      </div>
+      <div class="vs-col">
+        <div class="vs-eyebrow signal">after</div>
+        <div class="vs-h">A one-off&nbsp;<em>mini-app</em>&nbsp;designed for the task.</div>
+        <svg class="vs-doodle" viewBox="0 0 320 200" fill="none">
+          <rect x="0" y="0" width="320" height="200" stroke="#e8633a" stroke-opacity=".6"/>
+          <rect x="16" y="16" width="80" height="12" fill="#e8633a" opacity=".75"/>
+          <rect x="16" y="36" width="288" height="1" fill="#3d3b36"/>
+          <rect x="16" y="52" width="86" height="60" fill="none" stroke="#ece8dd" stroke-opacity=".5"/>
+          <rect x="116" y="52" width="86" height="60" fill="none" stroke="#ece8dd" stroke-opacity=".5"/>
+          <rect x="216" y="52" width="86" height="60" fill="none" stroke="#ece8dd" stroke-opacity=".5"/>
+          <rect x="26" y="62" width="46" height="6" fill="#e8633a" opacity=".7"/>
+          <rect x="26" y="74" width="60" height="4" fill="#75716a"/>
+          <rect x="26" y="82" width="46" height="4" fill="#75716a"/>
+          <rect x="126" y="62" width="46" height="6" fill="#87b178" opacity=".7"/>
+          <rect x="126" y="74" width="60" height="4" fill="#75716a"/>
+          <rect x="126" y="82" width="46" height="4" fill="#75716a"/>
+          <rect x="226" y="62" width="46" height="6" fill="#d6a04c" opacity=".7"/>
+          <rect x="226" y="74" width="60" height="4" fill="#75716a"/>
+          <rect x="226" y="82" width="46" height="4" fill="#75716a"/>
+          <line x1="16" y1="132" x2="304" y2="132" stroke="#3d3b36" stroke-dasharray="2 3"/>
+          <rect x="16" y="148" width="120" height="36" fill="none" stroke="#ece8dd" stroke-opacity=".3"/>
+          <rect x="148" y="148" width="156" height="36" fill="none" stroke="#ece8dd" stroke-opacity=".3"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ────────────────────────── CABINET ────────────────────────── -->
+<section class="cabinet" id="cabinet">
+  <div class="wrap">
+    <div class="cabinet-h">
+      <div class="cabinet-eyebrow"><span>specimen cabinet · four tasks · four interfaces</span></div>
+      <h2>One runtime. <em>Four shapes</em>.</h2>
+      <p class="cabinet-lede">
+        Each card below was generated end-to-end by HUXForm from a single line of intent.
+        The Director picked the metaphor, palette and typography; the UI Generator built
+        the HTML, CSS and JS; the stage rendered it inside a sandboxed iframe and wired
+        every control to a real tool through the bridge.
+      </p>
+    </div>
+
+    <div class="specimens">
+
+      <!-- 1. Weather -->
+      <article class="specimen" style="--task-bg:#0e151a;--task-ink:#dcecf5;--task-accent:#7fb7d3">
+        <div class="specimen-h">
+          <span class="specimen-no">Specimen N°01</span>
+          <span class="specimen-mode">status_view</span>
+        </div>
+        <div class="specimen-prompt">"what's the current weather in New York?"</div>
+        <div class="specimen-arrow"><span>meteorological observation card</span></div>
+        <div class="specimen-shape" style="background:#0e151a">
+          <img src="./assets/shot-weather.png" alt="Meteorological station readout for New York" loading="lazy"/>
+        </div>
+        <div class="specimen-foot">
+          <span>palette · cold observatory</span>
+          <span class="swatches">
+            <span style="background:#0e151a"></span>
+            <span style="background:#dcecf5"></span>
+            <span style="background:#7fb7d3"></span>
+            <span style="background:#9ab1bf"></span>
+            <span style="background:#3d3b36"></span>
+          </span>
+        </div>
+      </article>
+
+      <!-- 2. MCP explainer -->
+      <article class="specimen" style="--task-bg:#f7f4ef;--task-ink:#1a1814;--task-accent:#7d4a2c">
+        <div class="specimen-h">
+          <span class="specimen-no">Specimen N°02</span>
+          <span class="specimen-mode">explainer</span>
+        </div>
+        <div class="specimen-prompt">"explain what Model Context Protocol is, in three paragraphs"</div>
+        <div class="specimen-arrow"><span>technical specimen card</span></div>
+        <div class="specimen-shape" style="background:#f7f4ef">
+          <img src="./assets/shot-mcp.png" alt="MCP technical manual specimen" loading="lazy"/>
+        </div>
+        <div class="specimen-foot">
+          <span>palette · paper specimen</span>
+          <span class="swatches">
+            <span style="background:#f7f4ef"></span>
+            <span style="background:#ede9e1"></span>
+            <span style="background:#1a1814"></span>
+            <span style="background:#7d4a2c"></span>
+            <span style="background:#bca48a"></span>
+          </span>
+        </div>
+      </article>
+
+      <!-- 3. Payment comparison -->
+      <article class="specimen" style="--task-bg:#f0ebe1;--task-ink:#1a1814;--task-accent:#9e3a2a">
+        <div class="specimen-h">
+          <span class="specimen-no">Specimen N°03</span>
+          <span class="specimen-mode">decision_board</span>
+        </div>
+        <div class="specimen-prompt">"compare three payment processors for a US-based SaaS"</div>
+        <div class="specimen-arrow"><span>payment specimen cabinet</span></div>
+        <div class="specimen-shape" style="background:#f0ebe1">
+          <img src="./assets/shot-payments.png" alt="Payment processor comparison scorecard" loading="lazy"/>
+        </div>
+        <div class="specimen-foot">
+          <span>palette · field ledger</span>
+          <span class="swatches">
+            <span style="background:#f0ebe1"></span>
+            <span style="background:#bca48a"></span>
+            <span style="background:#1a1814"></span>
+            <span style="background:#9e3a2a"></span>
+            <span style="background:#75716a"></span>
+          </span>
+        </div>
+      </article>
+
+      <!-- 4. CSV bench -->
+      <article class="specimen" style="--task-bg:#f5f1e8;--task-ink:#3a3530;--task-accent:#b87333">
+        <div class="specimen-h">
+          <span class="specimen-no">Specimen N°04</span>
+          <span class="specimen-mode">generated_app</span>
+        </div>
+        <div class="specimen-prompt">"find duplicates in this CSV"</div>
+        <div class="specimen-arrow"><span>duplicate forensics bench</span></div>
+        <div class="specimen-shape" style="background:#f5f1e8">
+          <img src="./assets/shot-csv.png" alt="Duplicate forensics bench" loading="lazy"/>
+        </div>
+        <div class="specimen-foot">
+          <span>palette · forensics bench</span>
+          <span class="swatches">
+            <span style="background:#f5f1e8"></span>
+            <span style="background:#3a3530"></span>
+            <span style="background:#b87333"></span>
+            <span style="background:#7a6a5a"></span>
+            <span style="background:#d4c5a8"></span>
+          </span>
+        </div>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<!-- ────────────────────────── BRIDGE ────────────────────────── -->
+<section class="bridge">
+  <div class="wrap">
+    <h2>One <em>safe bridge</em>, every action.</h2>
+    <p class="bridge-lede">
+      Generated UIs run inside a sandboxed iframe — no same-origin, no
+      unrestricted network, no parent DOM access. The only way out is
+      <code style="font-family:var(--mono);font-size:14px;color:var(--ink)">window.agui.*</code>,
+      a tiny well-defined surface that proxies tool calls, uploads, file
+      reads, approvals and event subscription back to the backend.
+    </p>
+<pre class="code"><span class="c">// inside any generated mini-app</span>
+<span class="k">await</span> <span class="v">agui</span>.callTool(<span class="s">"data.parse_csv"</span>, { text })
+<span class="k">await</span> <span class="v">agui</span>.uploadFile(file)              <span class="c">// real OS picker → bridged upload</span>
+<span class="k">await</span> <span class="v">agui</span>.readFile(id)
+<span class="k">await</span> <span class="v">agui</span>.askApproval(<span class="s">"Send 12 invoices?"</span>)
+       <span class="v">agui</span>.setState({ stage: <span class="s">"deduped"</span> })
+       <span class="v">agui</span>.finalResult({ duplicates: 3 })
+       <span class="v">agui</span>.onEvent(ev =&gt; renderLive(ev))</pre>
+  </div>
+</section>
+
+<!-- ────────────────────────── ARCH ────────────────────────── -->
+<section class="arch" id="arch">
+  <div class="wrap">
+    <div class="arch-h">
+      <h2>Pipeline. <em>One pass</em>, one stage.</h2>
+      <p class="arch-lede">
+        Intent goes through a Director that commits to a structured visual
+        brief, then a UI Generator that emits a self-contained HTML
+        document. The document mounts inside a sandboxed iframe, takes
+        ambient palette from the brief, and talks to the world through
+        a permission-checked tool broker.
+      </p>
+    </div>
+    <div class="arch-img">
+      <img src="./assets/architecture.svg" alt="HUXForm architecture" />
+    </div>
+  </div>
+</section>
+
+<!-- ────────────────────────── START ────────────────────────── -->
+<section class="start" id="start">
+  <div class="wrap start-grid">
+    <div>
+      <h2>Start in <em>one command</em>.</h2>
+      <p class="start-lede">
+        The bootstrap checks your Python and Node, creates a virtualenv,
+        installs dependencies, asks for your Anthropic key (or any
+        Anthropic-compatible / OpenAI-compatible provider), starts both
+        servers and opens your browser. Next runs skip the setup.
+      </p>
+      <div class="stack">
+        <span>python 3.11+</span>
+        <span>node 20+</span>
+        <span>any LLM key</span>
+        <span>MIT</span>
+      </div>
+    </div>
+
+    <div class="terminal">
+      <div class="terminal-h">terminal · macOS · Linux · WSL</div>
+      <button class="copy-btn" id="copy-mac">copy</button>
+      <pre class="terminal-body" id="cmd-mac"><span class="prompt">$</span> <span class="cmd">git clone https://github.com/agiwhitelist/HUXForm.git</span>
+<span class="prompt">$</span> <span class="cmd">cd HUXForm</span>
+<span class="prompt">$</span> <span class="cmd">./bin/huxform</span>
+<span class="comment">  ◇ HUXForm — the interface takes the shape of the task</span>
+<span class="comment">  ✓ preflight  · python3 / node / npm</span>
+<span class="comment">  · paste your Anthropic key ⟶ ······</span>
+<span class="comment">  ✓ wrote .env</span>
+<span class="comment">  ✓ api ready · 127.0.0.1:8001</span>
+<span class="comment">  ✓ web ready · 127.0.0.1:5173</span>
+<span class="comment">  → http://localhost:5173</span></pre>
+
+      <div class="terminal-h" style="border-top:1px solid var(--hairline)">terminal · Windows · PowerShell 7+</div>
+      <button class="copy-btn" id="copy-win" style="top:auto;bottom:18px">copy</button>
+      <pre class="terminal-body" id="cmd-win"><span class="prompt">PS&gt;</span> <span class="cmd">git clone https://github.com/agiwhitelist/HUXForm.git</span>
+<span class="prompt">PS&gt;</span> <span class="cmd">cd HUXForm</span>
+<span class="prompt">PS&gt;</span> <span class="cmd">.\bin\huxform.ps1</span></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ────────────────────────── FOOTER ────────────────────────── -->
+<footer>
+  <h3>The interface should fit the&nbsp;<em>task</em>,<br>not the other way around.</h3>
+  <p class="ftr-sub">HUXForm is a small bet that generative human-experience runtimes are the next layer above chat — and that interfaces designed for one moment can be more useful than ten templated dashboards.</p>
+  <div class="ftr-links">
+    <a href="https://github.com/agiwhitelist/HUXForm" class="pri">github ↗</a>
+    <a href="#start" class="sec">install</a>
+    <a href="#cabinet" class="sec">see the demo</a>
+  </div>
+  <div class="ftr-end">HUXForm · MIT · v0.3 · 2026</div>
+</footer>
+
+<script>
+  // Rotating hero verb
+  const verbs = ["look like","feel like","behave","respond","remember","answer","map","hold"];
+  const verbEl = document.getElementById("hero-verb");
+  let vi = 0;
+  setInterval(() => {
+    vi = (vi + 1) % verbs.length;
+    verbEl.style.animation = "none";
+    void verbEl.offsetWidth;
+    verbEl.style.animation = "verbReveal 700ms cubic-bezier(.22,1,.36,1) both";
+    verbEl.textContent = verbs[vi];
+  }, 2800);
+
+  // Specimen hover palette tint
+  const specimens = document.querySelectorAll(".specimen");
+  specimens.forEach(s => {
+    s.addEventListener("mouseenter", () => {
+      const style = s.getAttribute("style") || "";
+      const m = style.match(/--task-bg:([^;]+)/);
+      if (m) {
+        document.documentElement.style.setProperty("--page-tint", m[1].trim());
+        document.body.style.transition = "background 600ms ease";
+        document.body.style.background =
+          `linear-gradient(180deg, color-mix(in oklab, ${m[1].trim()} 6%, transparent) 0%, transparent 50%), var(--ground)`;
+      }
+    });
+    s.addEventListener("mouseleave", () => {
+      document.body.style.background = "";
+    });
+  });
+
+  // Copy buttons
+  function attachCopy(btnId, cmdId, plain) {
+    const btn = document.getElementById(btnId);
+    btn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(plain);
+        btn.textContent = "copied";
+        btn.classList.add("copied");
+        setTimeout(() => { btn.textContent = "copy"; btn.classList.remove("copied"); }, 1800);
+      } catch {
+        btn.textContent = "err";
+      }
+    });
+  }
+  attachCopy("copy-mac", "cmd-mac",
+    "git clone https://github.com/agiwhitelist/HUXForm.git\ncd HUXForm\n./bin/huxform");
+  attachCopy("copy-win", "cmd-win",
+    "git clone https://github.com/agiwhitelist/HUXForm.git\ncd HUXForm\n.\\bin\\huxform.ps1");
+</script>
+</body>
+</html>

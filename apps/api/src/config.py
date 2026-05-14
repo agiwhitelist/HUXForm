@@ -1,10 +1,9 @@
 """Runtime configuration loaded from environment variables.
 
-AGUI is provider-agnostic. By default we talk to MiniMax M2.7 via its
-Anthropic-compatible endpoint, but any provider speaking either the
-Anthropic Messages or OpenAI Chat Completions protocol will work — just
-point AGUI_LLM_BASE_URL at it and pick the protocol via
-AGUI_LLM_PROTOCOL.
+HUXForm is provider-agnostic. By default we talk to Anthropic Claude
+Opus 4.7, but any provider speaking either the Anthropic Messages or
+OpenAI Chat Completions protocol will work — just point
+AGUI_LLM_BASE_URL at it and pick the protocol via AGUI_LLM_PROTOCOL.
 """
 
 from __future__ import annotations
@@ -34,9 +33,9 @@ def load_llm_config() -> LLMConfig:
     protocol = (_env("AGUI_LLM_PROTOCOL", "anthropic") or "anthropic").lower()
 
     if protocol == "anthropic":
-        base_url = _env("AGUI_LLM_BASE_URL", "https://api.minimax.io/anthropic") or ""
-        api_key = _env("AGUI_LLM_API_KEY") or _env("ANTHROPIC_AUTH_TOKEN") or _env("ANTHROPIC_API_KEY") or _env("MINIMAX_API_KEY") or ""
-        model = _env("AGUI_LLM_MODEL", "MiniMax-M2") or "MiniMax-M2"
+        base_url = _env("AGUI_LLM_BASE_URL", "https://api.anthropic.com") or ""
+        api_key = _env("AGUI_LLM_API_KEY") or _env("ANTHROPIC_API_KEY") or _env("ANTHROPIC_AUTH_TOKEN") or ""
+        model = _env("AGUI_LLM_MODEL", "claude-opus-4-7") or "claude-opus-4-7"
     elif protocol == "openai":
         base_url = _env("AGUI_LLM_BASE_URL", "https://api.openai.com/v1") or ""
         api_key = _env("AGUI_LLM_API_KEY") or _env("OPENAI_API_KEY") or ""

@@ -4,7 +4,7 @@ We deliberately do not depend on vendor SDKs. HUXForm's needs are simple:
 send a system prompt + a list of role/content messages, get back text.
 We support the two protocols that nearly every provider speaks:
 
-  * Anthropic Messages API  (POST /v1/messages)        — MiniMax, Anthropic
+  * Anthropic Messages API  (POST /v1/messages)        — Anthropic, MiniMax
   * OpenAI Chat Completions (POST /v1/chat/completions) — OpenAI, OpenRouter,
                                                           Groq, Together, ...
 

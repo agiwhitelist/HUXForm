@@ -77,10 +77,10 @@ function Prompt-Env {
     Write-Host ""
     Write-Dim "  HUXForm talks to any provider that speaks the Anthropic Messages or"
     Write-Host ""
-    Write-Dim "  OpenAI Chat Completions API. Default: MiniMax M2 (Anthropic-compatible)."
+    Write-Dim "  OpenAI Chat Completions API. Default: Anthropic Claude Opus 4.7."
     Write-Host ""; Write-Host ""
     Write-Host "  paste your " -NoNewline
-    Write-Ink "MiniMax API key"
+    Write-Ink "Anthropic API key"
     Write-Host "  ⟶  " -NoNewline
     $key = Read-Host
     if ([string]::IsNullOrWhiteSpace($key)) {
@@ -90,8 +90,8 @@ function Prompt-Env {
     @"
 # HUXForm — LLM provider
 AGUI_LLM_PROTOCOL=anthropic
-AGUI_LLM_BASE_URL=https://api.minimax.io/anthropic
-AGUI_LLM_MODEL=MiniMax-M2
+AGUI_LLM_BASE_URL=https://api.anthropic.com
+AGUI_LLM_MODEL=claude-opus-4-7
 AGUI_LLM_API_KEY=$key
 AGUI_LLM_MAX_TOKENS=4096
 AGUI_LLM_TEMPERATURE=0.6
