@@ -215,6 +215,77 @@ class Thread:
     turn_ids: list[str] = field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# Mission — multi-turn agentic execution toward one user goal
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class MissionStep:
+    title: str
+    detail: str = ""
+    turn_id: str | None = None
+    status: str = "pending"  # pending | running | done | failed | timeout | skipped
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "title": self.title,
+            "detail": self.detail,
+            "turn_id": self.turn_id,
+            "status": self.status,
+        }
+
+
+@dataclass
+class Mission:
+    id: str
+    thread_id: str
+    goal: str
+    created_at: float
+    steps: list[MissionStep] = field(default_factory=list)
+    current_step: int = 0
+    # planning | running | done | failed | cancelled
+    status: str = "planning"
+    error: str | None = None
+    cancelled: bool = False
+
+    _queues: list[asyncio.Queue[dict[str, Any]]] = field(default_factory=list, repr=False)
+    _history: list[dict[str, Any]] = field(default_factory=list, repr=False)
+
+    def emit(self, event: dict[str, Any]) -> None:
+        event = {**event, "mission_id": self.id, "ts": time.time()}
+        self._history.append(event)
+        if len(self._history) > 500:
+            self._history = self._history[-400:]
+        for q in list(self._queues):
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                pass
+
+    def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
+        q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=256)
+        for ev in self._history:
+            try:
+                q.put_nowait(ev)
+            except asyncio.QueueFull:
+                break
+        self._queues.append(q)
+        return q
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "thread_id": self.thread_id,
+            "goal": self.goal,
+            "created_at": self.created_at,
+            "status": self.status,
+            "error": self.error,
+            "current_step": self.current_step,
+            "steps": [s.to_dict() for s in self.steps],
+        }
+
+
 class Registry:
     """In-memory registry. PersistenceAdapter optionally hydrates/persists it."""
 
@@ -222,6 +293,7 @@ class Registry:
         self.threads: dict[str, Thread] = {}
         self.turns: dict[str, Turn] = {}
         self.files: dict[str, FileRecord] = {}
+        self.missions: dict[str, Mission] = {}
         self._lock = asyncio.Lock()
         self._listeners: list[Any] = []  # persistence adapters
 
@@ -293,6 +365,20 @@ class Registry:
         if not thread:
             return []
         return [self.turns[i] for i in thread.turn_ids if i in self.turns]
+
+    # Missions ---------------------------------------------------------------
+    async def create_mission(self, *, thread_id: str, goal: str) -> Mission:
+        async with self._lock:
+            mid = uuid.uuid4().hex[:10]
+            mission = Mission(id=mid, thread_id=thread_id, goal=goal, created_at=time.time())
+            self.missions[mid] = mission
+            return mission
+
+    def get_mission(self, mid: str) -> Mission | None:
+        return self.missions.get(mid)
+
+    def list_thread_missions(self, thread_id: str) -> list[Mission]:
+        return [m for m in self.missions.values() if m.thread_id == thread_id]
 
     # Files ------------------------------------------------------------------
     async def add_file(self, rec: FileRecord) -> None:

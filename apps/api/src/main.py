@@ -59,11 +59,12 @@ from .llm import LLMClient
 from .mcp_client import MCPManager
 from .narrator import Narrator
 from .openapi_adapter import OpenAPIAdapter, OpenAPIRegistration
+from .mission import drive_mission, stream_mission_events
 from .persistence import EventPersistor, Persistence
 from .researcher import Researcher
 from .runtime import set_registry
 from .runtime_stub import inject_runtime
-from .tasks import FileRecord, Registry, Turn, stream_events
+from .tasks import FileRecord, Mission, Registry, Turn, stream_events
 from .tools import get_registry, register_builtin_tools
 
 
@@ -189,6 +190,10 @@ class OpenAPIRegisterBody(BaseModel):
     base_url: str = ""
     auth_header_name: str | None = None
     auth_header_value: str | None = None
+
+
+class CreateMissionBody(BaseModel):
+    goal: str = Field(min_length=1, max_length=4000)
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +463,73 @@ async def download_file(file_id: str, request: Request) -> FileResponse:
 
 class AttachFileBody(BaseModel):
     file_id: str
+
+
+# ---------------------------------------------------------------------------
+# Missions
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/threads/{thread_id}/missions")
+async def create_mission(thread_id: str, body: CreateMissionBody, request: Request) -> dict[str, Any]:
+    state = request.app.state
+    registry: Registry = state.registry
+    thread = registry.get_thread(thread_id)
+    if thread is None:
+        raise HTTPException(404, "thread not found")
+    mission = await registry.create_mission(thread_id=thread_id, goal=body.goal)
+    asyncio.create_task(drive_mission(
+        mission,
+        llm=state.llm,
+        registry=registry,
+        state=state,
+        drive_turn=_drive_turn,
+    ))
+    return {"mission_id": mission.id, "thread_id": thread_id}
+
+
+@app.get("/api/missions/{mission_id}")
+async def get_mission(mission_id: str, request: Request) -> dict[str, Any]:
+    registry: Registry = request.app.state.registry
+    mission = registry.get_mission(mission_id)
+    if mission is None:
+        raise HTTPException(404, "mission not found")
+    return mission.to_dict()
+
+
+@app.get("/api/missions/{mission_id}/events")
+async def mission_events(mission_id: str, request: Request):
+    registry: Registry = request.app.state.registry
+    mission = registry.get_mission(mission_id)
+    if mission is None:
+        raise HTTPException(404, "mission not found")
+
+    async def gen():
+        async for ev in stream_mission_events(mission):
+            if await request.is_disconnected():
+                break
+            yield {"event": ev.get("type", "message"), "data": json.dumps(ev, ensure_ascii=False, default=str)}
+
+    return EventSourceResponse(gen())
+
+
+@app.post("/api/missions/{mission_id}/cancel")
+async def cancel_mission(mission_id: str, request: Request) -> dict[str, Any]:
+    registry: Registry = request.app.state.registry
+    mission = registry.get_mission(mission_id)
+    if mission is None:
+        raise HTTPException(404, "mission not found")
+    mission.cancelled = True
+    return {"ok": True, "status": mission.status}
+
+
+@app.get("/api/threads/{thread_id}/missions")
+async def list_thread_missions(thread_id: str, request: Request) -> dict[str, Any]:
+    registry: Registry = request.app.state.registry
+    if registry.get_thread(thread_id) is None:
+        raise HTTPException(404, "thread not found")
+    missions = registry.list_thread_missions(thread_id)
+    return {"missions": [m.to_dict() for m in sorted(missions, key=lambda m: m.created_at, reverse=True)]}
 
 
 @app.post("/api/turns/{turn_id}/files")

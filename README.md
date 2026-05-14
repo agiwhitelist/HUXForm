@@ -12,31 +12,54 @@
 
 </div>
 
-> **HUXForm** is a generative human-experience runtime for AI agents.
-> You describe a task in plain language. HUXForm **directs** a one-off visual
-> concept for it, **researches** the task with real tools (search, fetch, MCP,
-> CLI, OpenAPI…), generates a self-contained mini-app on the fly, and runs it
-> inside a sandboxed stage that talks back through a safe bridge.
+> **HUXForm is a runtime for generative software.**
+> You describe a task in one sentence. HUXForm **directs** a one-off visual
+> concept for it, **researches** the task with real tools (web search, fetch,
+> MCP servers, CLI, OpenAPI), **generates** a self-contained mini-app on the
+> fly, **streams** it onto the stage as the model draws it, and gives it a
+> safe bridge to call tools back — including the ability to **redesign
+> itself** mid-conversation.
 
-Not a chat. Not a dashboard kit. Not a component library. Every task gets its
-own interface — designed for that task and forgotten when it's done.
+Not a chat. Not a dashboard kit. Not a component library. Not a wrapper
+around someone else's UI. **Every task gets a custom piece of software,
+with real data, and that software is allowed to rewrite itself.**
 
 ```text
-Intent → Plan + Visual Brief → Research (real tool calls) → Generated mini-app → Bridged tools
+Intent
+  → Director (plan + visual brief)
+  → Researcher (real tool calls: web.search, web.fetch, mcp.*, files.read…)
+  → UI Generator (streaming HTML/CSS/JS, watch it being drawn)
+  → Sandboxed stage + bridge (the app calls tools; can also self-redesign)
+  → Mission loop (optional: chain N turns toward one bigger goal)
 ```
 
-Two things make HUXForm not just a UI generator:
+### Five things almost no other AI tool ships
 
-1. **Server-side ReAct loop.** Before codegen runs, a `Researcher` LLM
-   sees the plan, the tool catalog, and your goal, then *actually calls*
-   read/network tools (`web.search`, `web.fetch`, `mcp.*`, `files.read`, …)
-   until it has enough facts. The mini-app renders from those facts —
-   not from the model's imagination.
-2. **Live tool discovery.** Built-in `tools.discover` searches the public
-   MCP ecosystem (npm `@modelcontextprotocol/*`, GitHub `topic:mcp-server`)
-   and returns ranked candidates with install commands and trust scores.
-   `tools.install` (approval-gated, every time) spawns a candidate as an
-   MCP server and registers every tool it advertises.
+| # | Capability | Why it matters |
+|---|-----------|----------------|
+| 1 | **Generative UI, not a template** | The Director commits to a metaphor (a meteo station, a field notebook, a podium ceremony, a sonar sweep) **before any code is written**, with banned defaults. The UI Generator treats the brief as a constraint. Outputs converge to a one-off mini-app, never to "another dashboard". |
+| 2 | **Real data, not hallucination** | A server-side **Researcher** ReAct loop calls live tools (DuckDuckGo, optional Tavily/Brave/Serper, MCP servers, attached files) until it has facts. The codegen prompt forbids inventing numbers; the iframe receives `agui.research` as ground truth. |
+| 3 | **Streaming codegen** | The LLM streams HTML tokens. HUXForm injects the partial document into the iframe via `srcDoc` every ~120 ms — **you watch the app being designed live**: palette appears first, then the title, then sections fill in, then SVG details. On `ui_ready` the live, bridge-wired version swaps in. |
+| 4 | **Self-evolving UI** | From inside the iframe, a generated app can call `await agui.evolve("show me the same data as a sparkline grid")`. HUXForm regenerates the document around the existing task state and the iframe swaps to the new shape. The interface stays alive instead of accumulating dead toggles. |
+| 5 | **Live tool discovery + audited install** | `tools.discover` ranks candidates from npm `@modelcontextprotocol/*` + GitHub `topic:mcp-server`. `audit_top=N` reads each top candidate's README and asks an LLM to classify permissions, surface red flags ("ZIP extraction → path traversal") and compute a trust score. `tools.install` is approval-gated **every time** and spawns the chosen MCP server through either stdio or the streamable-HTTP transport. `tools.uninstall` undoes it. |
+
+### Plus one new layer above turns: Missions
+
+A user prompt is a single Turn. A **Mission** is multiple Turns chained
+toward one bigger goal. `POST /api/threads/{tid}/missions` with a goal,
+HUXForm breaks it into 3-7 concrete steps, spawns one Turn per step, and
+auto-advances when the prior step's UI reaches the stage. Each step
+renders its **own** mini-app with its own metaphor.
+
+```text
+Mission: "compare three small electric SUVs under €50k"
+
+  step 1  ▶  Research SUVs in Europe        → "Small Electric SUV Showroom"  research-pipeline ribbon, dark museum case
+  step 2  ▶  Build comparison board         → "ELECTRIC SUV SHOWROOM"       glossy auto-dealer with line-art silhouettes
+  step 3  ▶  Deliver final verdict          → "FINAL VERDICT"                F1-style podium with Tesla Model Y at #1
+```
+
+Same mission. Three completely different interfaces, picked for what each step actually needs.
 
 ---
 
@@ -61,8 +84,8 @@ moment.
   <table>
     <tr>
       <td align="center" width="50%">
-        <img src="./assets/shot-weather.png" alt="Meteorological station card" width="100%"/>
-        <sub><b>explainer · meteo station card</b><br/>"what is the current weather in New York City?" — Researcher called <code>web.search</code>, parsed real conditions from AccuWeather + Weather Underground; inline-SVG sun/cloud, real 56°F/63% humidity baked in</sub>
+        <img src="./assets/shot-weather.png" alt="Meteorological station card with real NYC data" width="100%"/>
+        <sub><b>explainer · meteo station card</b><br/>"what is the current weather in New York City?" — Researcher called <code>web.search</code>, parsed real conditions from AccuWeather + Weather Underground; inline-SVG sun/cloud, real 56°F / 63% humidity baked in</sub>
       </td>
       <td align="center" width="50%">
         <img src="./assets/shot-discover.png" alt="Filesystem tool scout report" width="100%"/>
@@ -71,18 +94,37 @@ moment.
     </tr>
     <tr>
       <td align="center" width="50%">
-        <img src="./assets/shot-payments.png" alt="Payment processor scorecard" width="100%"/>
-        <sub><b>decision_board · processor scorecard</b><br/>"compare payment processors" — feature matrix, scores, per-row verdicts</sub>
+        <img src="./assets/stream-final.png" alt="Vintage periodic table after streaming" width="100%"/>
+        <sub><b>generated_app · vintage scientific chart</b><br/>"draw me a periodic table styled as a vintage poster" — streamed live: parchment appears first, then ornate Victorian header, then the grid fills row-by-row. <a href="#streaming-codegen-watch-the-app-being-drawn">how streaming works ↓</a></sub>
       </td>
       <td align="center" width="50%">
-        <img src="./assets/shot-csv.png" alt="Duplicate forensics bench" width="100%"/>
-        <sub><b>generated_app · duplicate forensics bench</b><br/>"find duplicates in this CSV" — real drop-zone bound to the tool broker</sub>
+        <img src="./assets/evolve-noble-gases.png" alt="Same turn evolved into a noble-gas dial" width="100%"/>
+        <sub><b>evolved · noble-gas dial</b><br/>From the periodic-table iframe, <code>agui.evolve("circular dial, only noble gases, keep parchment palette")</code>. Same turn, same state — new shape, same identity. <a href="#self-evolving-ui-agui-evolve">how evolve works ↓</a></sub>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2" align="center">
+        <table>
+          <tr>
+            <td align="center" width="33%">
+              <img src="./assets/mission-step1.png" alt="Mission step 1 — research pipeline" width="100%"/>
+              <sub><b>mission · step 1/3</b><br/>"Research available small electric SUVs under €50k" — research-pipeline ribbon, dark museum case</sub>
+            </td>
+            <td align="center" width="33%">
+              <img src="./assets/mission-step2.png" alt="Mission step 2 — showroom" width="100%"/>
+              <sub><b>mission · step 2/3</b><br/>"Build comparison board" — glossy auto-dealer with line-art silhouettes, real spec rows, "BEST VALUE" badge</sub>
+            </td>
+            <td align="center" width="33%">
+              <img src="./assets/mission-step3.png" alt="Mission step 3 — podium verdict" width="100%"/>
+              <sub><b>mission · step 3/3</b><br/>"Deliver final verdict" — F1-style podium ceremony, Tesla Model Y at #1, "RACE STEWARD ANNOUNCEMENT"</sub>
+            </td>
+          </tr>
+        </table>
+        <sub>One mission. Three completely different metaphors. The Mission loop chose them, the Director designed them, the Researcher fed them real data, the Generator drew them live.</sub>
       </td>
     </tr>
   </table>
 </div>
-
-Same runtime, four completely different surfaces — picked and built per task.
 
 ---
 
@@ -171,20 +213,22 @@ docker build --target production -t huxform .   # prod single image (nginx + uvi
 |-------------------------------------|--------------------------------------------------------------------------------------------------------|
 | `apps/api/src/director.py`          | One LLM pass → presentation plan + visual brief (palette, typography, layout, motion, banned defaults) |
 | `apps/api/src/researcher.py`        | Server-side ReAct loop. Calls read/network tools before codegen; results land in `turn.state.research`.|
-| `apps/api/src/codegen.py`           | UI Generator. Consumes the brief + research and emits one self-contained HTML document.                |
-| `apps/api/src/runtime_stub.py`      | `window.agui.*` shim injected into every generated document (exposes `agui.research`).                 |
+| `apps/api/src/codegen.py`           | UI Generator. Streams HTML token-by-token; consumes the brief + research; supports `agui.evolve()` regeneration.|
+| `apps/api/src/mission.py`           | Mission planner + driver. Breaks a goal into 3-7 steps, spawns one Turn per step, auto-advances.       |
+| `apps/api/src/runtime_stub.py`      | `window.agui.*` shim injected into every generated document (`agui.research`, `agui.evolve`, …).        |
 | `apps/api/src/executor.py`          | Tool Broker + Permission Layer + dry-run + approvals.                                                  |
-| `apps/api/src/tools.py`             | Built-in capabilities (LLM, data.\*, web.search, web.fetch, files.read, task.\*, tools.discover/install, optional cli.\*). |
+| `apps/api/src/tools.py`             | Built-in capabilities (LLM, data.\*, web.\*, files.read, task.\*, tools.discover/install/uninstall, optional cli.\*). |
 | `apps/api/src/web_search.py`        | Multi-provider web search: Tavily → Brave → Serper → DuckDuckGo (default, no key) → SearXNG.           |
-| `apps/api/src/discovery.py`         | Tool Discovery + Capability Registry. `discover_tools()` ranks MCP candidates; `install_mcp_server()` spawns one. |
-| `apps/api/src/mcp_client.py`        | Stdio MCP-client manager. Auto-registers each MCP tool as `mcp.<alias>.<name>`.                        |
+| `apps/api/src/discovery.py`         | Tool Discovery + Capability Registry. `discover_tools()` ranks MCP candidates and audits READMEs.      |
+| `apps/api/src/mcp_client.py`        | MCP client. **stdio** subprocesses and **streamable-HTTP** remotes — both registered as `mcp.<alias>.<name>`.|
 | `apps/api/src/openapi_adapter.py`   | Loads any OpenAPI 3.x spec, exposes every operation as `openapi.<alias>.<op>`.                         |
+| `apps/api/src/llm.py`               | Provider-agnostic LLM client. Anthropic Messages + OpenAI Chat Completions, blocking + streaming.      |
 | `apps/api/src/narrator.py`          | Turns raw events into single-sentence human commentary.                                                |
-| `apps/api/src/tasks.py`             | Domain model: Thread → Turn → events / state / files.                                                  |
+| `apps/api/src/tasks.py`             | Domain model: Thread → Turn → events / state / files; Mission → Steps.                                 |
 | `apps/api/src/persistence.py`       | SQLite store with hydration on boot.                                                                   |
 | `apps/api/src/audit.py`             | Append-only audit of tool calls and approvals.                                                         |
-| `apps/web/src/App.tsx · Turn.tsx`   | Stage-first shell, palette sync, auto-fading chrome, history overlay.                                  |
-| `apps/web/src/bridge.ts`            | Per-turn iframe ↔ backend bridge — proxy tool calls, upload files, stream events.                     |
+| `apps/web/src/App.tsx · Turn.tsx`   | Stage-first shell, palette sync, auto-fading chrome, history overlay, streaming-iframe srcDoc preview, high-risk approval modal.|
+| `apps/web/src/bridge.ts`            | Per-turn iframe ↔ backend bridge. Tool calls, file upload, SSE events, `agui.evolve` proxy.            |
 
 ---
 
@@ -208,6 +252,105 @@ docker build --target production -t huxform .   # prod single image (nginx + uvi
   side drawer (toggle with `⌘.`).
 - **Sessions overlay.** Press `\` to open the gallery of past sessions —
   each card carries the palette swatches of its concept.
+
+---
+
+## Streaming codegen — watch the app being drawn
+
+The Codegen pass uses `LLMClient.complete_stream()` (Anthropic SSE or OpenAI
+SSE — both supported) and pushes the accumulated buffer through an
+`on_chunk` callback every ~120 ms / ~400 chars. The driver emits each
+buffer as `codegen_chunk` on the turn's SSE stream. The host shell pipes
+those into `iframe.srcDoc` after a small sanitisation pass (strips inline
+`<script>` blocks, trailing partial tags, and any leading markdown fence
+the model might wrap the document in).
+
+What the user sees:
+
+```text
+[t = 0.0 s]  curtain · "phase 02 · drawing"
+[t = 1.2 s]  parchment background appears in the iframe
+[t = 1.8 s]  ornate Victorian title materializes
+[t = 3.0 s]  table grid starts filling, row by row
+[t = 7.0 s]  inline SVG elements (sun, cloud, sigils) draw in
+[t = 9.0 s]  ui_ready → iframe swaps to live bridge-wired URL
+```
+
+On `ui_ready` the iframe `srcDoc` is cleared and `src` is set to
+`/api/turns/{id}/ui` — the live URL serves the same HTML with the runtime
+stub injected, so the bridge wakes up and the generated JS starts running.
+
+This works even when the LLM hits 6-7 seconds of latency: the user is
+*reading* a real interface forming on the page, not staring at a spinner.
+
+---
+
+## Self-evolving UI (`agui.evolve`)
+
+From inside a generated mini-app the JavaScript can ask HUXForm to
+**redraw the whole document around the same task state**:
+
+```js
+// inside the generated UI, on a button click
+document.getElementById('compare').addEventListener('click', async () => {
+  await agui.evolve('switch to a side-by-side table comparing both options, keep palette');
+});
+```
+
+Under the hood the bridge posts to `POST /api/turns/{turn_id}/regenerate`
+with the refine note, the codegen runs again (also streamed), and the
+iframe swaps to the new HTML on `ui_ready`. The turn ID, thread, state,
+files, and research results are all preserved — only the document changes.
+
+The codegen prompt forbids the generated UI from using `display:none`
+toggles to hide alternate views: when the user wants a different shape,
+call `agui.evolve()`. The interface stays alive instead of accumulating
+dead UI surface.
+
+Real example: starting from a full periodic-table mini-app, calling
+`agui.evolve('circular dial, only noble gases, keep parchment palette')`
+produces a new document where the layout is a circular dial with He / Ne /
+Ar / Kr cards arranged around it, palette preserved, title rewritten —
+**same turn**.
+
+---
+
+## Mission loop — multi-turn agentic execution
+
+A Turn is one user prompt → one mini-app. A Mission is one **goal** → 3-7
+auto-spawned Turns, each producing its own mini-app, advancing the goal
+step by step.
+
+```bash
+curl -X POST http://localhost:8001/api/threads/{thread_id}/missions \
+  -H 'content-type: application/json' \
+  -d '{"goal": "compare three small electric SUVs under 50k EUR"}'
+# → { "mission_id": "...", "thread_id": "..." }
+```
+
+What happens:
+
+1. `apps/api/src/mission.py` calls the Mission Planner LLM, which breaks
+   the goal into 3-7 concrete steps with titles + detail sentences.
+2. For each step, HUXForm creates a child Turn in the same thread
+   (`auto_proceed=True`), kicks off the full Director → Researcher →
+   Codegen pipeline, and waits for the iframe to reach the stage (status
+   `running`) before advancing.
+3. Each step's Turn carries `state.mission = { id, step, of, title }` so
+   the frontend can show a "step 2/3 · build comparison board" badge.
+4. The mission emits `mission_planning`, `mission_plan_ready`,
+   `mission_step_started`, `mission_step_done`, `mission_done` events on
+   its own SSE stream at `/api/missions/{mid}/events`.
+
+Endpoints:
+
+| Method | Path                                       | Purpose                            |
+|--------|--------------------------------------------|------------------------------------|
+| POST   | `/api/threads/{tid}/missions`              | Create + start a mission           |
+| GET    | `/api/missions/{mid}`                      | Mission snapshot (steps + status)  |
+| GET    | `/api/missions/{mid}/events`               | SSE event stream                   |
+| GET    | `/api/threads/{tid}/missions`              | List a thread's missions           |
+| POST   | `/api/missions/{mid}/cancel`               | Cancel; halts after the current step finishes |
 
 ---
 
@@ -295,27 +438,36 @@ HUXForm is provider-agnostic. Pick the protocol your provider speaks:
 | `task.log`          | write        | Emit a log event into the task stream.                                          |
 | `cli.<bin>`         | filesystem / destructive | Wrappers for host binaries (`git`, `gh`, `curl`, `jq`, …) — every call needs approval. |
 
-### MCP servers
+### MCP servers (stdio + HTTP)
 
-The bootstrap seeds `.agui/mcp.json` from `.agui/mcp.json.example`:
+The bootstrap seeds `.agui/mcp.json` from `.agui/mcp.json.example`. Both
+transports work in the same file:
 
 ```json
 {
   "servers": [
     { "alias": "fs",    "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"] },
     { "alias": "fetch", "command": "uvx", "args": ["mcp-server-fetch"] },
-    { "alias": "git",   "command": "uvx", "args": ["mcp-server-git", "--repository", "."] }
+    { "alias": "git",   "command": "uvx", "args": ["mcp-server-git", "--repository", "."] },
+
+    { "alias": "notion",
+      "url": "https://api.notion.com/mcp",
+      "headers": { "Authorization": "Bearer secret_xxx", "Notion-Version": "2022-06-28" } }
   ]
 }
 ```
+
+- An entry with `command` uses the **stdio** transport (child process).
+- An entry with `url` uses the **streamable-HTTP** transport
+  (https://spec.modelcontextprotocol.io/...). Auth lives in `headers`.
 
 `./workspace` is a sandboxed directory committed with a `.keep` marker —
 the filesystem MCP server is rooted there, so generated UIs that write
 files can't escape it.
 
-On boot HUXForm spawns each server, calls `tools/list`, and registers every
-tool as `mcp.<alias>.<name>` — immediately callable from any generated UI
-via `agui.callTool(...)`.
+On boot HUXForm starts each server, calls `tools/list`, and registers
+every tool as `mcp.<alias>.<name>` — immediately callable from any
+generated UI via `agui.callTool(...)`.
 
 ### Live tool discovery + install (the idea.md flow)
 
@@ -375,6 +527,11 @@ etc.
 | GET    | `/api/files/{fid}`                         | Download                                 |
 | GET    | `/api/tools`                               | Registered tools                         |
 | POST   | `/api/tools/openapi`                       | Register an OpenAPI spec                 |
+| POST   | `/api/threads/{tid}/missions`              | Create + start a mission                 |
+| GET    | `/api/missions/{mid}`                      | Mission snapshot                         |
+| GET    | `/api/missions/{mid}/events`               | Mission SSE event stream                 |
+| GET    | `/api/threads/{tid}/missions`              | List a thread's missions                 |
+| POST   | `/api/missions/{mid}/cancel`               | Cancel a mission                         |
 | GET    | `/api/audit?turn_id=&limit=`               | Audit tail                               |
 
 ---
@@ -420,15 +577,26 @@ You can always check state with `./bin/huxform doctor`.
 
 ## Roadmap
 
+Done:
+
 - [x] Server-side Researcher loop — call real tools before codegen
 - [x] Real web search by default (no API key required)
 - [x] `tools.discover` + `tools.install` for live MCP discovery
-- [x] Capability Registry persistence
-- [ ] LLM-graded trust scoring (read candidate README, classify permissions)
-- [ ] `tools.uninstall` + a UI to manage installed servers
-- [ ] Streaming partial codegen (watch the document being drawn line by line)
+- [x] LLM-graded trust scoring (read candidate README, classify permissions)
+- [x] `tools.uninstall` + capability registry persistence
+- [x] Streaming partial codegen (watch the document being drawn live)
+- [x] Self-evolving UI (`agui.evolve` from inside the iframe)
+- [x] Multi-turn Mission loop (one goal → N auto-spawned turns)
+- [x] Streamable-HTTP transport for MCP (remote / hosted servers)
+
+Next:
+
+- [ ] Voice in / voice out — Whisper transcript + TTS narration synced with codegen
+- [ ] Camera / image input — drop a photo, get a task-shaped mini-app
+- [ ] One-click share — public read-only URL with frozen state
+- [ ] Mission progress ribbon in the host shell (`step 2 / 5` badge)
+- [ ] Settings panel for capability registry (uninstall / inspect / re-audit)
 - [ ] LLM router for "refine current turn vs. open a new turn"
-- [ ] HTTP/SSE transport for MCP (right now: stdio only)
 - [ ] Cost dashboard + per-tool latency
 - [ ] Saved presets per organization (palette / typography defaults)
 - [ ] Multi-user mode with per-session isolation

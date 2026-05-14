@@ -1,27 +1,40 @@
 {
   "//": "HUXForm MCP server configuration. Copy this file to .agui/mcp.json and edit to taste.",
-  "//1": "Each entry is spawned as a child process at API startup; HUXForm calls tools/list and",
-  "//2": "registers every tool it advertises as mcp.<alias>.<tool_name>. Add/remove freely.",
-  "//3": "If a server needs an API key, put it under env (it stays out of process.env globally).",
+  "//1": "stdio entries spawn a child process; HTTP entries hit a remote streamable-http",
+  "//2": "endpoint (https://spec.modelcontextprotocol.io/...). Either way HUXForm calls",
+  "//3": "tools/list and registers every advertised tool as mcp.<alias>.<tool_name>.",
+  "//4": "For stdio servers, put API keys under env so they don't leak into process.env.",
+  "//5": "For HTTP servers, put auth under headers (e.g. \"Authorization\": \"Bearer ...\").",
 
   "servers": [
     {
       "alias": "fs",
-      "//": "Sandboxed filesystem rooted at ./workspace. The directory is created on first start.",
+      "//": "stdio · sandboxed filesystem rooted at ./workspace. Created on first start.",
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"]
     },
     {
       "alias": "fetch",
-      "//": "Read-only HTTP fetching. Use this when the model wants to GET a URL.",
+      "//": "stdio · read-only HTTP fetching. Use this when the model wants to GET a URL.",
       "command": "uvx",
       "args": ["mcp-server-fetch"]
     },
     {
       "alias": "git",
-      "//": "Local git operations for the current repo. read-only by default.",
+      "//": "stdio · local git operations for the current repo. read-only by default.",
       "command": "uvx",
       "args": ["mcp-server-git", "--repository", "."]
     }
+
+    /* Remote MCP example (uncomment + fill in to enable):
+
+    , {
+      "alias": "notion",
+      "// HTTP example": "Remote MCP server via streamable-http transport.",
+      "url": "https://api.notion.com/mcp",
+      "headers": { "Authorization": "Bearer secret_xxx", "Notion-Version": "2022-06-28" }
+    }
+
+    */
   ]
 }

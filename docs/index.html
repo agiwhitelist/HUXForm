@@ -162,12 +162,53 @@
   footer .ftr-links{display:flex;gap:18px;justify-content:center;margin-bottom:48px;flex-wrap:wrap}
   footer .ftr-end{font-family:var(--mono);font-size:10.5px;letter-spacing:.24em;color:var(--ink-dim);text-transform:uppercase}
 
+  /* ─── Capabilities (five things) ─── */
+  .caps{padding:120px 28px;background:linear-gradient(180deg,transparent,rgba(232,99,58,.02),transparent)}
+  .caps-h{margin-bottom:56px;max-width:780px}
+  .caps-eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.24em;color:var(--signal);text-transform:uppercase;margin-bottom:18px;display:flex;align-items:center;gap:14px}
+  .caps-eyebrow::after{content:"";flex:1;height:1px;background:var(--hairline)}
+  .caps h2{font-family:var(--serif);font-style:italic;font-weight:300;font-size:clamp(36px,4.5vw,56px);line-height:1.1;letter-spacing:-.015em;margin-bottom:18px}
+  .caps h2 em{font-style:normal;color:var(--signal)}
+  .caps-lede{color:var(--ink-soft);font-size:16px;line-height:1.7;max-width:62ch}
+  .caps-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
+  .cap{border:1px solid var(--hairline);background:var(--ground-2);padding:26px 28px;display:flex;flex-direction:column;gap:14px;transition:border-color .2s, transform .2s}
+  .cap:hover{border-color:var(--ink-soft);transform:translateY(-2px)}
+  .cap-num{font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;color:var(--signal);text-transform:uppercase}
+  .cap h3{font-family:var(--serif);font-style:italic;font-weight:300;font-size:24px;line-height:1.25;color:var(--ink)}
+  .cap h3 em{font-style:normal;color:var(--signal)}
+  .cap p{color:var(--ink-soft);font-size:14px;line-height:1.65;margin:0}
+  .cap code{font-family:var(--mono);font-size:12px;color:var(--ink);background:#06070a;padding:1px 6px;border:1px solid var(--hairline)}
+  .cap-tag{display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-dim);text-transform:uppercase;border:1px solid var(--hairline);padding:2px 8px}
+
+  /* ─── Mission arc (3 screenshots in sequence) ─── */
+  .arc{padding:120px 28px;background:#06070a;border-top:1px solid var(--hairline);border-bottom:1px solid var(--hairline)}
+  .arc-h{margin-bottom:48px;max-width:760px}
+  .arc-eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.24em;color:var(--signal);text-transform:uppercase;margin-bottom:18px;display:flex;align-items:center;gap:14px}
+  .arc-eyebrow::after{content:"";flex:1;height:1px;background:var(--hairline)}
+  .arc h2{font-family:var(--serif);font-style:italic;font-weight:300;font-size:clamp(34px,4.2vw,52px);line-height:1.1;letter-spacing:-.015em;margin-bottom:18px}
+  .arc h2 em{font-style:normal;color:var(--signal)}
+  .arc-lede{color:var(--ink-soft);font-size:16px;line-height:1.7;max-width:62ch}
+  .arc-strip{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:14px;align-items:start;margin-top:48px}
+  .arc-step{border:1px solid var(--hairline);background:var(--ground-2);overflow:hidden;display:flex;flex-direction:column}
+  .arc-step-h{padding:14px 18px;border-bottom:1px solid var(--hairline);display:flex;justify-content:space-between;align-items:baseline}
+  .arc-step-no{font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;color:var(--signal);text-transform:uppercase}
+  .arc-step-of{font-family:var(--mono);font-size:10px;letter-spacing:.18em;color:var(--ink-dim);text-transform:uppercase}
+  .arc-step-title{padding:16px 18px;font-family:var(--serif);font-style:italic;font-weight:300;font-size:18px;line-height:1.3;color:var(--ink);min-height:62px}
+  .arc-step-shot{border-top:1px solid var(--hairline)}
+  .arc-step-shot img{display:block;width:100%;height:auto}
+  .arc-arrow{display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:18px;color:var(--signal);padding-top:140px}
+  @media (max-width:1000px){
+    .arc-strip{grid-template-columns:1fr;gap:18px}
+    .arc-arrow{padding:0;transform:rotate(90deg);align-self:center}
+  }
+
   @media (max-width:780px){
     .manifesto-grid{grid-template-columns:1fr;gap:48px}
     .vs{grid-template-columns:1fr}
     .vs-col{border-right:0;border-bottom:1px solid var(--hairline)}
     .specimens{grid-template-columns:1fr}
     .start-grid{grid-template-columns:1fr;gap:40px}
+    .caps-grid{grid-template-columns:1fr}
     .nav{display:none}
   }
 </style>
@@ -183,8 +224,9 @@
   </a>
   <nav class="nav">
     <a href="#manifesto">the idea</a>
+    <a href="#capabilities">capabilities</a>
     <a href="#cabinet">demo</a>
-    <a href="#arch">architecture</a>
+    <a href="#mission">mission</a>
     <a href="#start">start</a>
     <a href="https://github.com/agiwhitelist/HUXForm" class="cta">github ↗</a>
   </nav>
@@ -199,16 +241,16 @@
       <span class="verb" id="hero-verb">look like</span>&nbsp;today?
     </h1>
     <p class="hero-sub">
-      HUXForm is a generative human-experience runtime for AI agents.
-      Describe a task in plain language. HUXForm directs a one-off
-      visual concept for it, <em>researches</em> the task with real
-      tools — web search, fetch, MCP servers, CLI, OpenAPI — then
-      generates a self-contained mini-app on the fly and runs it in a
-      sandboxed stage that talks back through a safe bridge.
+      HUXForm is a runtime for <em>generative software</em>. One sentence
+      in — HUXForm researches the task with real tools, streams a one-off
+      mini-app onto the stage as the model draws it, and lets that
+      software redesign itself when you want a different view. Not a
+      chat. Not a dashboard kit. Not a wrapper around someone else's
+      design system.
     </p>
     <div class="hero-cta">
       <a href="#start" class="pri">begin in one command ↵</a>
-      <a href="#cabinet" class="sec">see what it builds</a>
+      <a href="#capabilities" class="sec">five things almost nobody ships</a>
     </div>
   </div>
   <div class="hero-scroll">scroll</div>
@@ -267,6 +309,62 @@
           <rect x="148" y="148" width="156" height="36" fill="none" stroke="#ece8dd" stroke-opacity=".3"/>
         </svg>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ────────────────────────── CAPABILITIES ────────────────────────── -->
+<section class="caps" id="capabilities">
+  <div class="wrap">
+    <div class="caps-h">
+      <div class="caps-eyebrow"><span>five things almost nobody ships</span></div>
+      <h2>It isn't a chat. It's a&nbsp;<em>generative software runtime</em>.</h2>
+      <p class="caps-lede">
+        Stripped of the marketing — here's the actual set of capabilities
+        HUXForm ships today that you won't find in ChatGPT, Claude.ai,
+        Gemini, or any "AI dashboard" tool. Open <code>./bin/huxform</code>
+        and they're all live in your browser in under a minute.
+      </p>
+    </div>
+
+    <div class="caps-grid">
+
+      <article class="cap">
+        <div class="cap-num">capability 01</div>
+        <h3>Generative UI, not a&nbsp;<em>template</em>.</h3>
+        <p>A Director LLM commits to a concrete metaphor (a meteo station, a field notebook, a podium ceremony) plus palette, typography and motion <em>before any code is written</em>, with a list of banned defaults. The UI Generator treats it as a constraint. Output converges to a one-off mini-app, never to "another dashboard".</p>
+      </article>
+
+      <article class="cap">
+        <div class="cap-num">capability 02</div>
+        <h3>Real data, not&nbsp;<em>hallucination</em>.</h3>
+        <p>A server-side <em>Researcher</em> ReAct loop calls live tools — DuckDuckGo (no key), optional Tavily / Brave / Serper, MCP servers, attached files — until it has facts. The codegen prompt forbids inventing numbers; the iframe receives <code>agui.research</code> as ground truth.</p>
+      </article>
+
+      <article class="cap">
+        <div class="cap-num">capability 03</div>
+        <h3>Streaming codegen — watch the app&nbsp;<em>being drawn</em>.</h3>
+        <p>The LLM streams HTML tokens. HUXForm sanitizes the partial document and pumps it into <code>iframe.srcDoc</code> every ~120 ms. Palette appears first, then the title, then sections fill in, then SVG details. On <code>ui_ready</code> the live bridge-wired version swaps in. No spinner — the user reads a real interface forming on the page.</p>
+      </article>
+
+      <article class="cap">
+        <div class="cap-num">capability 04</div>
+        <h3>The app can&nbsp;<em>redesign itself</em>.</h3>
+        <p>From inside the iframe: <code>await agui.evolve("show me as a side-by-side comparison, keep the palette")</code> regenerates the document around the same task state. Same turn, same data, new shape. The codegen prompt forbids hiding alternate views with toggles — the interface stays alive instead of accumulating dead UI.</p>
+      </article>
+
+      <article class="cap">
+        <div class="cap-num">capability 05</div>
+        <h3>Live tool discovery&nbsp;+&nbsp;<em>audited install</em>.</h3>
+        <p><code>tools.discover</code> ranks candidates from npm <code>@modelcontextprotocol/*</code> and GitHub <code>topic:mcp-server</code>. <code>audit_top=N</code> reads each top README and asks an LLM to classify permissions, flag risks ("ZIP extraction → path traversal"), and score trustworthiness. <code>tools.install</code> is approval-gated <em>every time</em> and spawns the server through either stdio or streamable-HTTP. <code>tools.uninstall</code> undoes it.</p>
+      </article>
+
+      <article class="cap">
+        <div class="cap-num">bonus · capability 06</div>
+        <h3>Multi-turn&nbsp;<em>Mission loop</em>.</h3>
+        <p>A user prompt is one Turn. A <em>Mission</em> is one goal → 3-7 auto-spawned Turns, each producing its own mini-app, advancing the goal step by step. <code>POST /api/threads/{tid}/missions</code> with a goal, HUXForm plans the steps and auto-advances when each step's UI reaches the stage. <a href="#mission">See it work →</a></p>
+      </article>
+
     </div>
   </div>
 </section>
@@ -402,6 +500,71 @@
        <span class="v">agui</span>.setState({ stage: <span class="s">"deduped"</span> })
        <span class="v">agui</span>.finalResult({ duplicates: 3 })
        <span class="v">agui</span>.onEvent(ev =&gt; renderLive(ev))</pre>
+  </div>
+</section>
+
+<!-- ────────────────────────── MISSION ARC ────────────────────────── -->
+<section class="arc" id="mission">
+  <div class="wrap">
+    <div class="arc-h">
+      <div class="arc-eyebrow"><span>mission · one goal · three interfaces</span></div>
+      <h2>One mission. Three&nbsp;<em>completely different</em>&nbsp;mini-apps.</h2>
+      <p class="arc-lede">
+        A Mission is one goal turned into 3-7 auto-spawned Turns. HUXForm
+        plans the arc, the Director picks a fresh metaphor for every step,
+        the Researcher pulls live data, the UI Generator draws each step's
+        mini-app, and the loop auto-advances when each step's stage is
+        ready. The user keeps every step's interface — they don't get
+        replaced, they pile up as a journey.
+      </p>
+      <p class="arc-lede" style="margin-top:14px">
+        Below: one mission ran end-to-end with the prompt
+        <em>"compare three small electric SUVs under 50k EUR"</em>. Same
+        runtime — three completely different visual identities, picked for
+        what each step actually needs.
+      </p>
+    </div>
+
+    <div class="arc-strip">
+
+      <article class="arc-step">
+        <div class="arc-step-h">
+          <span class="arc-step-no">Step 01</span>
+          <span class="arc-step-of">research</span>
+        </div>
+        <div class="arc-step-title">"Research available small electric SUVs under €50k"</div>
+        <div class="arc-step-shot">
+          <img src="./assets/mission-step1.png" alt="Research pipeline ribbon, dark museum case" loading="lazy"/>
+        </div>
+      </article>
+
+      <div class="arc-arrow">⟶</div>
+
+      <article class="arc-step">
+        <div class="arc-step-h">
+          <span class="arc-step-no">Step 02</span>
+          <span class="arc-step-of">compare</span>
+        </div>
+        <div class="arc-step-title">"Build a comparison board of the top three"</div>
+        <div class="arc-step-shot">
+          <img src="./assets/mission-step2.png" alt="Glossy SUV showroom with line-art silhouettes and real specs" loading="lazy"/>
+        </div>
+      </article>
+
+      <div class="arc-arrow">⟶</div>
+
+      <article class="arc-step">
+        <div class="arc-step-h">
+          <span class="arc-step-no">Step 03</span>
+          <span class="arc-step-of">verdict</span>
+        </div>
+        <div class="arc-step-title">"Deliver the final verdict on the best choice"</div>
+        <div class="arc-step-shot">
+          <img src="./assets/mission-step3.png" alt="F1-style podium ceremony with Tesla Model Y at #1" loading="lazy"/>
+        </div>
+      </article>
+
+    </div>
   </div>
 </section>
 
