@@ -75,9 +75,9 @@ Same runtime, four completely different surfaces — picked and built per task.
 ## Quick start
 
 Clone the repo and run one script. It checks your Python and Node versions,
-creates a virtualenv, installs dependencies, prompts for your Anthropic key
-(or any Anthropic-compatible / OpenAI-compatible key), starts both servers
-and opens your browser.
+creates a virtualenv, installs dependencies, prompts for an LLM API key
+(any Anthropic-compatible or OpenAI-compatible provider), starts both
+servers and opens your browser.
 
 **macOS / Linux / WSL**
 
@@ -103,7 +103,7 @@ That's it. The script does the rest:
 
   setup
   ✓  python3 / node / npm preflight
-  paste your Anthropic API key  ⟶  ······
+  paste your LLM API key  ⟶  ······
   ✓  wrote .env
   api · creating Python venv
   api · installing dependencies
@@ -127,11 +127,11 @@ skipped automatically.
 | Python       | 3.11+   | `python3 --version` |
 | Node.js      | 20+     | `node --version` |
 | npm          | 10+     | bundled with Node |
-| An LLM key   | —       | Anthropic Claude Opus 4.7 by default; or any Anthropic / OpenAI-compatible endpoint |
+| An LLM key   | —       | Any Anthropic-compatible or OpenAI-compatible provider. Bring your own model. |
 
-Get a key from [console.anthropic.com](https://console.anthropic.com/). To
-switch to MiniMax, OpenAI, OpenRouter, Groq, Together, Ollama or any other
-provider, edit `.env` after first run (see [Provider configuration](#provider-configuration)).
+Anthropic, OpenAI, MiniMax, OpenRouter, Groq, Together, AWS Bedrock,
+Ollama — anything that speaks one of the two protocols works. Edit `.env`
+after the first run to switch (see [Provider configuration](#provider-configuration)).
 
 ### Other ways to run
 
@@ -225,8 +225,8 @@ HUXForm is provider-agnostic. Pick the protocol your provider speaks:
 | Var                   | Default                              | Notes                                  |
 |-----------------------|--------------------------------------|----------------------------------------|
 | `AGUI_LLM_PROTOCOL`   | `anthropic`                          | `anthropic` (Messages) or `openai`     |
-| `AGUI_LLM_BASE_URL`   | `https://api.anthropic.com`          | Provider base URL.                     |
-| `AGUI_LLM_MODEL`      | `claude-opus-4-7`                    | Model id.                              |
+| `AGUI_LLM_BASE_URL`   | `https://api.anthropic.com`          | Provider base URL — point anywhere.    |
+| `AGUI_LLM_MODEL`      | (provider model id)                  | Any model your provider exposes.       |
 | `AGUI_LLM_API_KEY`    | —                                    | API key.                               |
 | `AGUI_LLM_MAX_TOKENS` | `4096`                               |                                        |
 | `AGUI_LLM_TEMPERATURE`| `0.6`                                |                                        |
@@ -236,9 +236,10 @@ HUXForm is provider-agnostic. Pick the protocol your provider speaks:
 | `AGUI_ENABLE_CLI`     | unset                                | Enables `cli.*` host-CLI tools.        |
 | `AGUI_CLI_ALLOWLIST`  | unset                                | Optional `:`-separated allowlist.      |
 
-> Default is **Anthropic Claude Opus 4.7**. Switch to MiniMax, OpenAI, Groq,
-> OpenRouter, Together or Ollama by changing the four `AGUI_LLM_*` vars —
-> no SDK changes required.
+> HUXForm doesn't care which model you bring. Anthropic, OpenAI, MiniMax,
+> Groq, OpenRouter, Together, AWS Bedrock proxy, Ollama — anything that
+> speaks the Anthropic Messages API or the OpenAI Chat Completions API
+> works. Change the four `AGUI_LLM_*` vars — no SDK changes required.
 
 ---
 

@@ -1,9 +1,9 @@
 """Runtime configuration loaded from environment variables.
 
-HUXForm is provider-agnostic. By default we talk to Anthropic Claude
-Opus 4.7, but any provider speaking either the Anthropic Messages or
-OpenAI Chat Completions protocol will work — just point
-AGUI_LLM_BASE_URL at it and pick the protocol via AGUI_LLM_PROTOCOL.
+HUXForm is provider-agnostic. Any provider speaking either the
+Anthropic Messages or OpenAI Chat Completions protocol works — just
+point AGUI_LLM_BASE_URL at it, pick the protocol via AGUI_LLM_PROTOCOL,
+and set AGUI_LLM_MODEL to whatever model id the provider exposes.
 """
 
 from __future__ import annotations

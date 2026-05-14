@@ -77,10 +77,10 @@ function Prompt-Env {
     Write-Host ""
     Write-Dim "  HUXForm talks to any provider that speaks the Anthropic Messages or"
     Write-Host ""
-    Write-Dim "  OpenAI Chat Completions API. Default: Anthropic Claude Opus 4.7."
+    Write-Dim "  OpenAI Chat Completions API — bring any model your provider exposes."
     Write-Host ""; Write-Host ""
     Write-Host "  paste your " -NoNewline
-    Write-Ink "Anthropic API key"
+    Write-Ink "LLM API key"
     Write-Host "  ⟶  " -NoNewline
     $key = Read-Host
     if ([string]::IsNullOrWhiteSpace($key)) {

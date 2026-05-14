@@ -60,10 +60,10 @@ prompt_env() {
   fi
   echo
   c_dim "  HUXForm talks to any provider that speaks the Anthropic Messages or"; echo
-  c_dim "  OpenAI Chat Completions API. Default: Anthropic Claude Opus 4.7."; echo
+  c_dim "  OpenAI Chat Completions API — bring any model your provider exposes."; echo
   echo
   printf "  paste your "
-  c_ink "Anthropic API key"
+  c_ink "LLM API key"
   printf "  ⟶  "
   read -r key
   if [[ -z "$key" ]]; then
