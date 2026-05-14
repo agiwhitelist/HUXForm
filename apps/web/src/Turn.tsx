@@ -42,10 +42,6 @@ export function Stage(props: {
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [latestNarration, setLatestNarration] = useState<string>("");
   const [iframeLoaded, setIframeLoaded] = useState(false);
-  // Partial HTML pushed by the server as the LLM streams codegen tokens.
-  // While this is non-empty we feed it into iframe.srcDoc so the user
-  // watches the document being drawn live. Cleared on ui_ready.
-  const [streamingHtml, setStreamingHtml] = useState<string>("");
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const bridgeRef = useRef<Bridge | null>(null);
@@ -61,7 +57,6 @@ export function Stage(props: {
     setEvents([]);
     setLatestNarration("");
     setIframeLoaded(false);
-    setStreamingHtml("");
   }, [props.turn.id]);
 
   // bridge + SSE; restarts when turn id changes
@@ -85,30 +80,33 @@ export function Stage(props: {
           setTurn((p) => ({ ...p, status: "awaiting_steer" }));
         } else if (ev.type === "codegen_started") {
           setTurn((p) => ({ ...p, status: "generating" }));
-          setStreamingHtml("");
-          setIframeLoaded(false);
-        } else if (ev.type === "codegen_chunk") {
-          const html = String((ev as any).html ?? "");
-          if (html) setStreamingHtml(html);
+          // Point the iframe at the streaming endpoint NOW so it starts
+          // receiving chunks while the LLM is still generating. The
+          // browser parses the response progressively — no per-chunk
+          // srcDoc swap, no flicker. The endpoint sends the runtime stub
+          // and any deferred <script> blocks at the end so the bridge
+          // wakes up cleanly when the stream closes.
+          const f = iframeRef.current;
+          if (f) {
+            uiVersionRef.current += 1;
+            f.removeAttribute("srcdoc");
+            f.src = `/api/turns/${turn.id}/ui-stream?v=${uiVersionRef.current}&t=${Date.now()}`;
+            setIframeLoaded(true);
+          }
         } else if (ev.type === "ui_ready") {
           setTurn((p) => ({ ...p, has_ui: true, status: "running" }));
-          // Clear streaming preview and let the iframe load the real URL,
-          // which serves the same HTML with the runtime stub injected
-          // and the bridge wired up.
-          setStreamingHtml("");
-          if ((ev as any).regenerated) {
-            const f = iframeRef.current;
-            if (f) {
-              uiVersionRef.current += 1;
-              f.removeAttribute("srcdoc");
-              f.src = `/api/turns/${turn.id}/ui?v=${uiVersionRef.current}&t=${Date.now()}`;
-              setIframeLoaded(true);
-            }
-          }
         } else if (ev.type === "regenerating") {
           setTurn((p) => ({ ...p, status: "generating" }));
-          setStreamingHtml("");
           setIframeLoaded(false);
+          // agui.evolve / manual regenerate — reload the iframe through
+          // the streaming endpoint so the new document is drawn live too.
+          const f = iframeRef.current;
+          if (f) {
+            uiVersionRef.current += 1;
+            f.removeAttribute("srcdoc");
+            f.src = `/api/turns/${turn.id}/ui-stream?v=${uiVersionRef.current}&t=${Date.now()}`;
+            setIframeLoaded(true);
+          }
         } else if (ev.type === "running") {
           setTurn((p) => ({ ...p, status: "running" }));
         } else if (ev.type === "research_done") {
@@ -159,12 +157,9 @@ export function Stage(props: {
     });
   }, [turn.plan, props.tools, turn.user_message, turn.files, turn.state]);
 
-  // Drive the iframe in two phases:
-  //   1) while codegen is streaming, feed sanitized partial HTML into
-  //      iframe.srcDoc so the user watches the document being drawn
-  //      token-by-token — script tags are stripped during streaming.
-  //   2) once ui_ready fires (streamingHtml cleared, has_ui=true), load
-  //      the real URL with the runtime stub and the bridge wired up.
+  // If the iframe didn't start streaming yet (e.g. we restored a prior
+  // turn whose status is already past codegen_started), fall back to the
+  // cached final HTML at /ui.
   useEffect(() => {
     if (!turn.has_ui) return;
     const f = iframeRef.current;
@@ -173,14 +168,6 @@ export function Stage(props: {
     f.src = `/api/turns/${turn.id}/ui?t=${Date.now()}`;
     setIframeLoaded(true);
   }, [turn.has_ui, turn.id, iframeLoaded]);
-
-  useEffect(() => {
-    if (iframeLoaded) return;
-    if (!streamingHtml) return;
-    const f = iframeRef.current;
-    if (!f) return;
-    f.srcdoc = sanitizePartialHtml(streamingHtml);
-  }, [streamingHtml, iframeLoaded]);
 
   // bubble snapshot up
   useEffect(() => {
@@ -236,7 +223,7 @@ export function Stage(props: {
           src="about:blank"
         />
 
-        {!turn.has_ui && status !== "failed" && (
+        {!iframeLoaded && !turn.has_ui && status !== "failed" && (
           <Curtain plan={turn.plan} brief={brief} status={status} />
         )}
 
@@ -593,42 +580,6 @@ function summarize(ev: TaskEvent): string {
   if (t === "failed") return String(a.message || "");
   if (t === "file_attached") return a.file?.name || "";
   return "";
-}
-
-/**
- * Sanitize an in-progress HTML document for use as iframe.srcDoc during
- * codegen streaming.
- *
- * The LLM emits the document top-down, so at any frame we typically have
- * a complete <head> plus an in-progress <body>. Two things would break the
- * preview if we just dumped it as-is:
- *
- *  1. Inline <script> blocks fire as soon as they're parsed, even if they
- *    haven't finished streaming — half a function body crashes the iframe.
- *    Strip them entirely during preview; the final iframe.src load runs
- *    the complete + safe version.
- *  2. The last open tag is usually incomplete (e.g. `<div clas`). Drop it
- *    so the parser doesn't try to read attribute syntax from garbage.
- */
-function sanitizePartialHtml(html: string): string {
-  if (!html) return "";
-  let s = html;
-  // Some providers wrap the answer in ```html ... ``` even when told not to.
-  // Strip leading fence + language tag if present, and the trailing fence
-  // (which may still be in-flight).
-  s = s.replace(/^\s*```(?:html|HTML)?\s*\n?/, "");
-  s = s.replace(/\n?```\s*$/, "");
-  // Strip complete <script>...</script> blocks
-  s = s.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
-  // Strip a half-open trailing <script ...> (no closing tag yet)
-  s = s.replace(/<script\b[^]*$/i, "");
-  // Drop a trailing partial tag — anything after the last `<` with no `>`
-  const lastLT = s.lastIndexOf("<");
-  const lastGT = s.lastIndexOf(">");
-  if (lastLT > lastGT) {
-    s = s.slice(0, lastLT);
-  }
-  return s;
 }
 
 function fmtTime(ts: unknown): string {

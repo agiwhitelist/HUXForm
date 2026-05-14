@@ -46,7 +46,7 @@ from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -63,7 +63,7 @@ from .mission import drive_mission, stream_mission_events
 from .persistence import EventPersistor, Persistence
 from .researcher import Researcher
 from .runtime import set_registry
-from .runtime_stub import inject_runtime
+from .runtime_stub import RUNTIME_STUB, inject_runtime
 from .tasks import FileRecord, Mission, Registry, Turn, stream_events
 from .tools import get_registry, register_builtin_tools
 
@@ -323,6 +323,222 @@ async def get_turn_ui(turn_id: str, request: Request) -> HTMLResponse:
     if turn.html is None:
         return HTMLResponse(_WAITING_HTML.replace("{{TURN_ID}}", turn_id), status_code=202)
     return HTMLResponse(inject_runtime(turn.html))
+
+
+# ---------------------------------------------------------------------------
+# Streaming codegen: the iframe loads /ui-stream as soon as codegen starts.
+# The endpoint subscribes to the turn's event queue, yields HTML to the
+# response as `codegen_chunk` events arrive — minus any <script> blocks,
+# which we defer until the stream closes so half-written JS can't run. At
+# the end we flush the runtime stub + every deferred script + closing tags.
+# The browser renders the response progressively (native HTML streaming),
+# which is what kills the per-chunk srcDoc flicker.
+# ---------------------------------------------------------------------------
+
+
+class _ScriptStripper:
+    """Stream HTML, hold back complete <script> blocks for the final flush.
+
+    Also strips any leading ```html / ``` markdown fence the LLM might wrap
+    the document in even when we tell it not to (some providers ignore the
+    instruction).
+    """
+
+    def __init__(self) -> None:
+        self.deferred: list[str] = []
+        self.buffer: str = ""
+        self._fence_handled = False
+        self._sent_any = False
+
+    def feed(self, chunk: str) -> str:
+        self.buffer += chunk
+
+        # Strip leading ```html / ``` fence the very first time we have
+        # something to look at. Wait until we have at least a few chars so
+        # we don't drop them prematurely.
+        if not self._fence_handled and len(self.buffer) >= 8:
+            stripped = self.buffer.lstrip()
+            if stripped.startswith("```"):
+                # Drop the opening fence (up to and including the first \n).
+                lead = self.buffer.index("```")
+                nl = self.buffer.find("\n", lead)
+                if nl > -1:
+                    self.buffer = self.buffer[nl + 1:]
+                    self._fence_handled = True
+                # else: not enough data yet, wait
+            else:
+                self._fence_handled = True
+
+        out: list[str] = []
+        while self.buffer:
+            lower = self.buffer.lower()
+            i = lower.find("<script")
+            if i < 0:
+                out.append(self.buffer)
+                self.buffer = ""
+                break
+            # Everything before the next <script> is safe to flush.
+            if i > 0:
+                out.append(self.buffer[:i])
+                self.buffer = self.buffer[i:]
+            j = self.buffer.lower().find("</script>")
+            if j < 0:
+                # Script block is incomplete — wait for more chunks.
+                break
+            end = j + len("</script>")
+            self.deferred.append(self.buffer[:end])
+            self.buffer = self.buffer[end:]
+        joined = "".join(out)
+        if joined:
+            self._sent_any = True
+        return joined
+
+    def finalize_safe_tail(self) -> str:
+        rest = self.buffer
+        self.buffer = ""
+        # Drop trailing ``` fence if the LLM closed the markdown block.
+        rest = rest.rstrip()
+        if rest.endswith("```"):
+            rest = rest[:-3].rstrip()
+        if rest.lower().lstrip().startswith("<script"):
+            # Incomplete trailing script — drop it.
+            return ""
+        return rest
+
+    def deferred_scripts(self) -> str:
+        return "".join(self.deferred)
+
+
+def _build_stream_opener(turn: Turn) -> str:
+    """Open the streamed HTML doc with the turn's brief palette baked into
+    a default body style + a small loading shimmer. We also pad the response
+    with a >=1 KB comment because most browsers buffer the first kilobyte of
+    a chunked text/html response before committing to incremental rendering.
+    Without the pad, iframes can show a black void for several seconds even
+    though bytes are arriving."""
+    bg = "#0b0d10"
+    ink = "#e6e8ef"
+    accent = "#7aa2ff"
+    plan = turn.plan
+    concept = ""
+    if plan:
+        concept = (plan.visual_concept or "").replace("_", " ")
+        if plan.visual_brief and isinstance(plan.visual_brief.palette, dict):
+            pal = plan.visual_brief.palette
+            bg = str(pal.get("bg") or pal.get("background") or bg)
+            ink = str(pal.get("ink") or pal.get("foreground") or pal.get("text") or ink)
+            accent = str(pal.get("accent") or pal.get("signal") or accent)
+    # Pad to ~1.2 KB so Chrome/Firefox/Safari commit to incremental render
+    pad = "<!-- " + ("·" * 200) + " -->\n"
+    opener = (
+        "<!DOCTYPE html>\n"
+        "<meta charset=\"utf-8\">\n"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+        "<title>HUXForm</title>\n"
+        "<style>\n"
+        "  html,body{margin:0;min-height:100vh;font:14px/1.5 ui-sans-serif,system-ui,sans-serif;}\n"
+        f"  html,body{{background:{bg};color:{ink};}}\n"
+        "  .__huxform_boot{position:fixed;inset:0;display:grid;place-items:center;pointer-events:none;}\n"
+        "  .__huxform_boot div{font-family:ui-monospace,Menlo,monospace;font-size:11px;letter-spacing:.22em;text-transform:uppercase;opacity:.5;}\n"
+        f"  .__huxform_boot div::after{{content:' ▍';color:{accent};animation:__huxform_blink 700ms steps(1) infinite;}}\n"
+        "  @keyframes __huxform_blink{50%{opacity:0;}}\n"
+        "</style>\n"
+        "<body>\n"
+        f"<div class=\"__huxform_boot\"><div>drawing {concept or 'interface'}…</div></div>\n"
+        f"{pad}"
+    )
+    return opener
+
+
+_STREAM_CLOSER = "\n</body>\n</html>\n"
+
+
+@app.get("/api/turns/{turn_id}/ui-stream")
+async def get_turn_ui_stream(turn_id: str, request: Request) -> StreamingResponse:
+    registry: Registry = request.app.state.registry
+    turn = registry.get_turn(turn_id)
+    if turn is None:
+        raise HTTPException(404, "turn not found")
+
+    async def gen():
+        # If the turn is already complete, hand the iframe the cached HTML
+        # in one shot — no need to stream.
+        if turn.html and turn.status in {"running", "done", "failed", "cancelled"}:
+            yield inject_runtime(turn.html)
+            return
+
+        # Tiny opener so the iframe paints a palette-tinted background
+        # instead of staying black while the LLM warms up. The doctype +
+        # meta are harmless duplicates of whatever the model later emits.
+        yield _build_stream_opener(turn)
+
+        stripper = _ScriptStripper()
+        prev_sent = 0
+        first_content_seen = False
+        q = turn.subscribe()
+        try:
+            terminal_seen = False
+            while not terminal_seen:
+                try:
+                    ev = await asyncio.wait_for(q.get(), timeout=45.0)
+                except asyncio.TimeoutError:
+                    # If a terminal status snuck through without a stream
+                    # event (e.g. crashed before codegen_started), bail.
+                    if turn.status in {"failed", "cancelled"}:
+                        break
+                    # Heartbeat as an HTML comment so the connection stays
+                    # warm without affecting layout.
+                    yield "<!-- hb -->"
+                    continue
+                etype = ev.get("type")
+                if etype == "codegen_chunk":
+                    full = str(ev.get("html") or "")
+                    if len(full) <= prev_sent:
+                        continue
+                    delta = full[prev_sent:]
+                    prev_sent = len(full)
+                    safe = stripper.feed(delta)
+                    if safe:
+                        # Hide the boot indicator only once the LLM has
+                        # actually opened its <body> — before that the
+                        # stream is just doctype + head + styles which
+                        # are invisible, so the boot indicator should
+                        # stay up to give the user a focal point.
+                        if not first_content_seen and "<body" in full.lower():
+                            yield "<style>.__huxform_boot{display:none!important;}</style>\n"
+                            first_content_seen = True
+                        yield safe
+                elif etype in {"ui_ready", "regenerated"}:
+                    terminal_seen = True
+                elif etype in {"failed", "cancelled"}:
+                    yield f"<!-- stream halted: {etype} -->"
+                    terminal_seen = True
+        finally:
+            try:
+                turn.unsubscribe(q)
+            except Exception:
+                pass
+
+        # Flush any trailing safe text we held back (anything that wasn't
+        # the start of a script block).
+        tail = stripper.finalize_safe_tail()
+        if tail:
+            yield tail
+
+        # Inject the runtime stub BEFORE the deferred scripts so window.agui
+        # is alive by the time the LLM's scripts run.
+        yield RUNTIME_STUB
+        yield stripper.deferred_scripts()
+        yield _STREAM_CLOSER
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/html; charset=utf-8",
+        headers={
+            "X-Accel-Buffering": "no",  # disable proxy buffering when behind nginx
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @app.get("/api/turns/{turn_id}/events")

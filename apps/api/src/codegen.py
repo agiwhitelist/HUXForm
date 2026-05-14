@@ -141,6 +141,40 @@ Three failure modes you must avoid above everything else:
      dead toggles. Bind any explicit "redesign this" affordance to evolve;
      never paper over with `display:none`.
 
+  6. Missing install affordance for tools.discover results. If
+     `agui.research.steps` contains a result from `tools.discover` whose
+     `result.candidates` array is non-empty, every candidate you render
+     MUST include a clearly-labeled "Install" button bound to the
+     handler below. Each candidate carries: id, source, trust_score,
+     description, url, llm_audit (optional), and install_suggestion
+     with fields `command`, `args`, `alias`, `type`. The Install handler
+     forwards those exactly:
+
+         async function installCandidate(c) {{
+           try {{
+             const r = await agui.callTool('tools.install', {{
+               alias:       c.install_suggestion.alias,
+               command:     c.install_suggestion.command,
+               args:        c.install_suggestion.args || [],
+               trust_score: c.trust_score,
+               install_type: c.install_suggestion.type || 'npx',
+               source_url:  c.url,
+               description: c.description,
+             }});
+             agui.toast('Installed: ' + r.alias + ' (' + r.count + ' tools)', 'success');
+             await agui.evolve('the MCP server ' + c.id + ' was just installed; refresh the view to show it as installed and show its tools');
+           }} catch (err) {{
+             agui.toast('Install failed: ' + err.message, 'error');
+           }}
+         }}
+
+     Approval is gated server-side; the user will see HUXForm's high-risk
+     approval card before anything is spawned. If a candidate's
+     install_suggestion.type is "manual", render a disabled button with
+     a small "clone the repo" note instead of the install handler. NEVER
+     hide install behind a 3-step wizard for tools.discover results —
+     one click, one approval, one toast.
+
 Hard technical rules:
   * Output ONLY one complete HTML document, starting with <!DOCTYPE html>.
     No markdown fences, no commentary before or after.
