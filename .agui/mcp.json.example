@@ -1,0 +1,27 @@
+{
+  "//": "HUXForm MCP server configuration. Copy this file to .agui/mcp.json and edit to taste.",
+  "//1": "Each entry is spawned as a child process at API startup; HUXForm calls tools/list and",
+  "//2": "registers every tool it advertises as mcp.<alias>.<tool_name>. Add/remove freely.",
+  "//3": "If a server needs an API key, put it under env (it stays out of process.env globally).",
+
+  "servers": [
+    {
+      "alias": "fs",
+      "//": "Sandboxed filesystem rooted at ./workspace. The directory is created on first start.",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"]
+    },
+    {
+      "alias": "fetch",
+      "//": "Read-only HTTP fetching. Use this when the model wants to GET a URL.",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    },
+    {
+      "alias": "git",
+      "//": "Local git operations for the current repo. read-only by default.",
+      "command": "uvx",
+      "args": ["mcp-server-git", "--repository", "."]
+    }
+  ]
+}

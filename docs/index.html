@@ -201,9 +201,10 @@
     <p class="hero-sub">
       HUXForm is a generative human-experience runtime for AI agents.
       Describe a task in plain language. HUXForm directs a one-off
-      visual concept for it, generates a self-contained mini-app on the
-      fly, and runs it in a sandboxed stage that talks back through a
-      safe bridge.
+      visual concept for it, <em>researches</em> the task with real
+      tools — web search, fetch, MCP servers, CLI, OpenAPI — then
+      generates a self-contained mini-app on the fly and runs it in a
+      sandboxed stage that talks back through a safe bridge.
     </p>
     <div class="hero-cta">
       <a href="#start" class="pri">begin in one command ↵</a>
@@ -218,8 +219,9 @@
   <div class="wrap manifesto-grid">
     <div>
       <h2>Every other AI app sends you back a&nbsp;<em>paragraph</em>.</h2>
-      <p>We send you back a piece of software built for one moment.</p>
+      <p>We send you back a piece of software built for one moment — with <em>real data</em>, not invented numbers.</p>
       <p>Three columns of dark cards, sidebar, hamburger, glassmorphism — that's the cul-de-sac most LLM UIs end up in. HUXForm fights it in two places: a Director that commits to a concrete metaphor, palette and typography <em>before</em> any code is written, and a UI Generator that treats that brief as a constraint, not a suggestion.</p>
+      <p>Between them sits a <em>Researcher</em>: a server-side ReAct loop that calls real tools (web search, fetch, MCP servers, OpenAPI, CLI) until it has facts, then hands them to the UI Generator. Generated mini-apps render from those facts — not from the model's imagination. The Researcher can also <em>discover and install</em> new MCP servers at runtime, with explicit approval each time.</p>
       <p>The shell itself dissolves while you work. When a task is on stage, chrome auto-fades, the palette of the generated app bleeds into the surrounding frame, and the only thing on screen is the mini-app HUXForm built for <em>this</em> moment.</p>
     </div>
     <div class="vs">
@@ -285,48 +287,48 @@
 
     <div class="specimens">
 
-      <!-- 1. Weather -->
-      <article class="specimen" style="--task-bg:#0e151a;--task-ink:#dcecf5;--task-accent:#7fb7d3">
+      <!-- 1. Weather (real research → meteo station card) -->
+      <article class="specimen" style="--task-bg:#efe9dc;--task-ink:#3a3530;--task-accent:#c45c2d">
         <div class="specimen-h">
           <span class="specimen-no">Specimen N°01</span>
-          <span class="specimen-mode">status_view</span>
+          <span class="specimen-mode">explainer</span>
         </div>
-        <div class="specimen-prompt">"what's the current weather in New York?"</div>
-        <div class="specimen-arrow"><span>meteorological observation card</span></div>
-        <div class="specimen-shape" style="background:#0e151a">
-          <img src="./assets/shot-weather.png" alt="Meteorological station readout for New York" loading="lazy"/>
+        <div class="specimen-prompt">"what is the current weather in New York City right now"</div>
+        <div class="specimen-arrow"><span>meteo station card · live data baked in by the Researcher</span></div>
+        <div class="specimen-shape" style="background:#efe9dc">
+          <img src="./assets/shot-weather.png" alt="Meteo station card with real New York weather data" loading="lazy"/>
         </div>
         <div class="specimen-foot">
-          <span>palette · cold observatory</span>
+          <span>web.search → DDG → real 56°F / 63% humidity</span>
           <span class="swatches">
-            <span style="background:#0e151a"></span>
-            <span style="background:#dcecf5"></span>
-            <span style="background:#7fb7d3"></span>
-            <span style="background:#9ab1bf"></span>
-            <span style="background:#3d3b36"></span>
+            <span style="background:#efe9dc"></span>
+            <span style="background:#d4cfc4"></span>
+            <span style="background:#3a3530"></span>
+            <span style="background:#c45c2d"></span>
+            <span style="background:#5c574d"></span>
           </span>
         </div>
       </article>
 
-      <!-- 2. MCP explainer -->
-      <article class="specimen" style="--task-bg:#f7f4ef;--task-ink:#1a1814;--task-accent:#7d4a2c">
+      <!-- 2. Tool discovery (Researcher + tools.discover) -->
+      <article class="specimen" style="--task-bg:#ece4d3;--task-ink:#2a2620;--task-accent:#6b4a2a">
         <div class="specimen-h">
           <span class="specimen-no">Specimen N°02</span>
-          <span class="specimen-mode">explainer</span>
+          <span class="specimen-mode">report</span>
         </div>
-        <div class="specimen-prompt">"explain what Model Context Protocol is, in three paragraphs"</div>
-        <div class="specimen-arrow"><span>technical specimen card</span></div>
-        <div class="specimen-shape" style="background:#f7f4ef">
-          <img src="./assets/shot-mcp.png" alt="MCP technical manual specimen" loading="lazy"/>
+        <div class="specimen-prompt">"find me the 5 best MCP servers for filesystem access"</div>
+        <div class="specimen-arrow"><span>field assessment · Researcher called tools.discover + web.search</span></div>
+        <div class="specimen-shape" style="background:#ece4d3">
+          <img src="./assets/shot-discover.png" alt="Filesystem tool scout report with real npm + GitHub data" loading="lazy"/>
         </div>
         <div class="specimen-foot">
-          <span>palette · paper specimen</span>
+          <span>tools.discover → npm + GitHub → trust 0.35 / 264K dl</span>
           <span class="swatches">
-            <span style="background:#f7f4ef"></span>
-            <span style="background:#ede9e1"></span>
-            <span style="background:#1a1814"></span>
-            <span style="background:#7d4a2c"></span>
-            <span style="background:#bca48a"></span>
+            <span style="background:#ece4d3"></span>
+            <span style="background:#d8ceb6"></span>
+            <span style="background:#2a2620"></span>
+            <span style="background:#6b4a2a"></span>
+            <span style="background:#75716a"></span>
           </span>
         </div>
       </article>

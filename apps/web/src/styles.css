@@ -1024,6 +1024,102 @@ button { background: none; border: 0; cursor: pointer; padding: 0; }
 }
 .approval-card .primary:hover { background: var(--signal-2); border-color: var(--signal-2); }
 
+/* High-risk variant — install / uninstall / destructive / filesystem / secret */
+.approval-card.is-high-risk {
+  border-color: #d23a1c;
+  box-shadow: 0 30px 80px rgba(210, 58, 28, 0.35);
+}
+.approval-card .approval-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid currentColor;
+  color: var(--ink-dim);
+}
+.approval-card .approval-pill.high {
+  color: #ff6a45;
+  border-color: #ff6a45;
+}
+.approval-card .approval-pill.low {
+  color: var(--signal);
+  border-color: var(--signal);
+}
+.approval-card .approval-desc {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.approval-card .approval-install {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--ground);
+  border: 1px solid var(--hairline);
+  padding: 14px;
+}
+.approval-card .approval-field {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 12px;
+  align-items: baseline;
+  font-size: 12px;
+}
+.approval-card .approval-field-k {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.approval-card .approval-field-v {
+  color: var(--ink-soft);
+  line-height: 1.5;
+  word-break: break-word;
+}
+.approval-card .approval-cmd {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: #06070a;
+  padding: 6px 8px;
+  border: 1px solid var(--hairline);
+}
+.approval-card .approval-link {
+  color: var(--ink);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.approval-card .approval-trust {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 1px 7px;
+  border: 1px solid currentColor;
+  margin-right: 8px;
+}
+.approval-card .approval-trust.good { color: #87b178; }
+.approval-card .approval-trust.ok   { color: #d6a04c; }
+.approval-card .approval-trust.low  { color: #ff6a45; }
+.approval-card .approval-trust-note {
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+.approval-card .approval-warn {
+  margin: 0;
+  font-size: 12px;
+  color: #ff6a45;
+  border-left: 2px solid currentColor;
+  padding-left: 10px;
+  line-height: 1.45;
+}
+.approval-card .primary.danger {
+  background: #d23a1c;
+  border-color: #d23a1c;
+}
+.approval-card .primary.danger:hover {
+  background: #b8311a;
+  border-color: #b8311a;
+}
+
 
 /* -------------------------------------------------------------------------
    Misc

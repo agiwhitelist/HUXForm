@@ -11,8 +11,14 @@ dist/
 *.tsbuildinfo
 .huxform-data/
 .agui-data/
-.agui/
+.agui/*
+!.agui/mcp.json.example
 .omc/
+
+# Sandboxed workspace for the filesystem MCP server. Keep the directory marker
+# in git so the path always exists; ignore everything the agent writes inside.
+workspace/*
+!workspace/.keep
 test-dupes.csv
 apps/web/test-dupes.csv
 idea.md

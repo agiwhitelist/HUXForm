@@ -53,16 +53,18 @@ from sse_starlette.sse import EventSourceResponse
 from .audit import Audit
 from .codegen import UIGenerator
 from .director import Director
+from .discovery import CapabilityRegistry, hydrate_installed
 from .executor import ApprovalDenied, Cancelled, Executor, ToolNotFound
 from .llm import LLMClient
 from .mcp_client import MCPManager
 from .narrator import Narrator
 from .openapi_adapter import OpenAPIAdapter, OpenAPIRegistration
 from .persistence import EventPersistor, Persistence
+from .researcher import Researcher
 from .runtime import set_registry
 from .runtime_stub import inject_runtime
 from .tasks import FileRecord, Registry, Turn, stream_events
-from .tools import register_builtin_tools
+from .tools import get_registry, register_builtin_tools
 
 
 log = logging.getLogger("agui")
@@ -90,13 +92,30 @@ async def lifespan(app: FastAPI):
 
     audit = Audit(AUDIT_DB_PATH)
 
-    tools = register_builtin_tools(llm)
+    capability_registry = CapabilityRegistry(DATA_DIR / "capability_registry.json")
 
+    # Single ToolRegistry instance shared by builtin tools, the MCP manager,
+    # and the OpenAPI adapter. Builtin tools are populated first; MCP /
+    # OpenAPI / capability-registry hydration append additional entries.
+    tools = get_registry()
     mcp = MCPManager(tools)
+    register_builtin_tools(
+        llm,
+        mcp_manager=mcp,
+        capability_registry=capability_registry,
+    )
+
     try:
         await mcp.start_from_config(MCP_CONFIG_PATH)
     except Exception as exc:
         log.exception("MCP startup error: %s", exc)
+
+    try:
+        n = await hydrate_installed(mcp, capability_registry)
+        if n:
+            log.info("hydrated %d MCP tools from capability registry", n)
+    except Exception as exc:
+        log.exception("capability registry hydrate error: %s", exc)
 
     openapi = OpenAPIAdapter(tools)
 
@@ -107,9 +126,11 @@ async def lifespan(app: FastAPI):
     app.state.audit = audit
     app.state.mcp = mcp
     app.state.openapi = openapi
+    app.state.capability_registry = capability_registry
     app.state.director = Director(llm)
     app.state.codegen = UIGenerator(llm, tools)
     app.state.executor = Executor(tools)
+    app.state.researcher = Researcher(llm, tools, app.state.executor, max_steps=5)
     app.state.narrator = Narrator(llm)
     app.state.event_persistor = EventPersistor(persistence)
 
@@ -511,7 +532,22 @@ async def _drive_turn(turn: Turn, state: Any) -> None:
                     turn.cancel()
                 return
 
-        # 4. Codegen
+        # 4. Researcher: pull real-world data BEFORE codegen so the UI has
+        #    facts to render instead of LLM hallucination.
+        if not turn.cancelled:
+            turn.status = "researching"
+            try:
+                await state.researcher.research(
+                    turn,
+                    directed.plan,
+                    attached_files=attached,
+                )
+                await persistence.save_turn(turn)
+            except Exception as exc:
+                log.exception("researcher failed (non-fatal): %s", exc)
+                turn.emit({"type": "research_failed", "message": str(exc)})
+
+        # 5. Codegen
         turn.status = "generating"
         turn.emit({"type": "codegen_started"})
         if turn.cancelled:
@@ -520,6 +556,7 @@ async def _drive_turn(turn: Turn, state: Any) -> None:
             goal=turn.user_message,
             plan=directed.plan,
             files=attached,
+            research=turn.state.get("research"),
         )
         turn.html = html
         # naive cumulative usage
@@ -560,6 +597,7 @@ async def _regenerate_turn(turn: Turn, state: Any, refine_note: str | None) -> N
             files=attached,
             refine_note=refine_note,
             previous_html=previous_html,
+            research=turn.state.get("research"),
         )
         turn.html = html
         for k, v in (usage or {}).items():

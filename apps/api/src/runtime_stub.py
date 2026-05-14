@@ -23,6 +23,23 @@ RUNTIME_STUB = """<script>(function(){
     if (ev && ev.type === 'state_patch' && ev.patch) {
       Object.assign(stateSnapshot, ev.patch);
     }
+    if (ev && ev.type === 'research_done' && window.agui) {
+      var existing = window.agui.research || { summary: '', steps: [], stopped: '' };
+      window.agui.research = {
+        summary: typeof ev.summary === 'string' ? ev.summary : (existing.summary || ''),
+        steps:   Array.isArray(existing.steps) ? existing.steps : [],
+        stopped: typeof ev.stopped === 'string' ? ev.stopped : (existing.stopped || ''),
+      };
+    }
+    if (ev && ev.type === 'research_step' && window.agui) {
+      var r = window.agui.research || { summary: '', steps: [], stopped: 'in_progress' };
+      if (!Array.isArray(r.steps)) r.steps = [];
+      r.steps.push({
+        tool: ev.tool, params: ev.params_preview, reason: ev.reason,
+        ok: false, result: null, error: null,
+      });
+      window.agui.research = r;
+    }
     if (ev && ev.type === 'file_attached' && ev.file && window.agui) {
       var files = window.agui.files || [];
       var exists = false;
@@ -47,6 +64,7 @@ RUNTIME_STUB = """<script>(function(){
       window.agui.goal = d.goal || '';
       window.agui.taskId = d.taskId || '';
       window.agui.files = d.files || [];
+      window.agui.research = d.research || { summary: '', steps: [], stopped: '' };
       var hist = d.history || [];
       for (var i = 0; i < hist.length; i++) fanout(hist[i]);
       window.dispatchEvent(new CustomEvent('agui:boot', { detail: d }));
@@ -76,6 +94,7 @@ RUNTIME_STUB = """<script>(function(){
   }
   window.agui = {
     plan: null, tools: [], goal: '', taskId: '', files: [],
+    research: { summary: '', steps: [], stopped: '' },
     callTool: call,
     setState: function(patch){ return call('task.set_state', { patch: patch }); },
     getState: function(){ return Object.assign({}, stateSnapshot); },

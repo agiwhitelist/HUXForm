@@ -51,6 +51,11 @@ doctor() {
   else
     c_bad "  ✗"; printf "  .env is missing or has no API key (run: ./bin/huxform setup)\n"
   fi
+  if [[ -f "$ROOT/.agui/mcp.json" ]]; then
+    c_good "  ✓"; printf "  .agui/mcp.json present\n"
+  else
+    c_dim "  ·  no .agui/mcp.json yet — will be seeded from example on first setup"; echo
+  fi
   echo
 }
 
@@ -79,8 +84,28 @@ AGUI_LLM_API_KEY=$key
 AGUI_LLM_MAX_TOKENS=4096
 AGUI_LLM_TEMPERATURE=0.6
 AGUI_DATA_DIR=.huxform-data
+
+# CLI tools (git, curl, jq, gh, …) are registered as tools the model can call.
+# Every CLI call still requires explicit approval through the bridge.
+AGUI_ENABLE_CLI=1
+
+# Optional web search providers — DuckDuckGo is the zero-config default.
+# Set any of the keys below to use that provider instead.
+# TAVILY_API_KEY=
+# BRAVE_API_KEY=
+# SERPER_API_KEY=
 EOF
   c_good "  ✓  wrote .env"; echo
+}
+
+seed_mcp_config() {
+  local mcp_dir="$ROOT/.agui"
+  local mcp_real="$mcp_dir/mcp.json"
+  local mcp_tmpl="$mcp_dir/mcp.json.example"
+  if [[ -f "$mcp_real" ]]; then return 0; fi
+  if [[ ! -f "$mcp_tmpl" ]]; then return 0; fi
+  cp "$mcp_tmpl" "$mcp_real"
+  c_good "  ✓  seeded .agui/mcp.json (edit to enable/disable MCP servers)"; echo
 }
 
 setup() {
@@ -88,6 +113,7 @@ setup() {
   c_dim "  setup"; echo
   echo
   prompt_env
+  seed_mcp_config
   echo
   c_dim "  api · creating Python venv"; echo
   (cd "$API" && python3 -m venv .venv 2>&1 | sed 's/^/    /')

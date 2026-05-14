@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from .llm import LLMClient, extract_json
+from .web_search import web_fetch, web_search
 
 
 Risk = str  # "read" | "write" | "destructive" | "network" | "filesystem" | "secret"
@@ -34,8 +35,13 @@ class Tool:
     params_schema: dict[str, Any]
     requires_approval: bool
     handler: Callable[..., Awaitable[Any]]
-    source: str = "builtin"  # builtin | mcp | openapi | cli
+    source: str = "builtin"  # builtin | mcp | openapi | cli | discovered
     examples: list[str] = field(default_factory=list)
+    # ── Full Capability Registry fields (from idea.md) ──────────────────
+    install: dict[str, Any] | None = None           # { type, command, args }
+    trust_score: float | None = None                # 0..1, set by Discovery
+    permissions: list[str] = field(default_factory=list)
+    title_id: str | None = None                     # human-friendly slug
 
 
 @dataclass
@@ -69,6 +75,9 @@ class ToolRegistry:
                 "source": t.source,
                 "params": t.params_schema,
                 "examples": t.examples,
+                "install": t.install,
+                "trust_score": t.trust_score,
+                "permissions": t.permissions,
             }
             for t in self.tools.values()
         ]
@@ -113,46 +122,12 @@ async def _llm_structured(*, llm: LLMClient, prompt: str, schema_hint: str) -> d
     return {"value": extract_json(reply.text), "usage": reply.usage}
 
 
-async def _web_search_stub(*, llm: LLMClient, query: str, limit: int = 5) -> dict[str, Any]:
-    sys = (
-        "You simulate a web search. Return JSON: "
-        '{"results": [{"title": str, "url": str, "snippet": str, "score": 0..1}]}'
-        f". At most {limit} results. Use realistic-looking but clearly illustrative data."
-    )
-    reply = await llm.complete(
-        system=sys,
-        messages=[{"role": "user", "content": f"Query: {query}"}],
-        temperature=0.4,
-    )
-    try:
-        return extract_json(reply.text)
-    except ValueError:
-        return {"results": []}
+async def _web_search(*, query: str, limit: int = 6) -> dict[str, Any]:
+    return await web_search(query, limit=int(limit))
 
 
-async def _web_search_tavily(*, api_key: str, query: str, limit: int = 5) -> dict[str, Any]:
-    import httpx
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        r = await client.post(
-            "https://api.tavily.com/search",
-            json={
-                "api_key": api_key,
-                "query": query,
-                "max_results": int(limit),
-                "search_depth": "basic",
-            },
-        )
-        r.raise_for_status()
-        data = r.json()
-    results = []
-    for item in data.get("results", []) or []:
-        results.append({
-            "title": item.get("title"),
-            "url": item.get("url"),
-            "snippet": item.get("content"),
-            "score": item.get("score"),
-        })
-    return {"results": results, "answer": data.get("answer")}
+async def _web_fetch(*, url: str, max_bytes: int = 800_000, extract_links: bool = False) -> dict[str, Any]:
+    return await web_fetch(url, max_bytes=int(max_bytes), extract_links=bool(extract_links))
 
 
 _NUM_RE = re.compile(r"^-?\d+(?:[.,]\d+)?$")
@@ -383,7 +358,12 @@ def discover_cli_tools(registry: ToolRegistry) -> int:
 # ---------------------------------------------------------------------------
 
 
-def register_builtin_tools(llm: LLMClient) -> ToolRegistry:
+def register_builtin_tools(
+    llm: LLMClient,
+    *,
+    mcp_manager: Any = None,
+    capability_registry: Any = None,
+) -> ToolRegistry:
     _REGISTRY.tools.clear()
 
     _REGISTRY.register(Tool(
@@ -406,27 +386,45 @@ def register_builtin_tools(llm: LLMClient) -> ToolRegistry:
         handler=lambda **kw: _llm_structured(llm=llm, **kw),
     ))
 
-    tavily_key = os.environ.get("TAVILY_API_KEY", "")
-    if tavily_key:
-        _REGISTRY.register(Tool(
-            name="web.search",
-            title="Web search (Tavily)",
-            description="Search the public web via Tavily.",
-            risk="network",
-            requires_approval=False,
-            params_schema={"query": "string", "limit?": "integer"},
-            handler=lambda **kw: _web_search_tavily(api_key=tavily_key, **kw),
-        ))
-    else:
-        _REGISTRY.register(Tool(
-            name="web.search",
-            title="Web search (simulated)",
-            description="Search the public web. No backend configured — results are illustrative. Set TAVILY_API_KEY for real search.",
-            risk="network",
-            requires_approval=False,
-            params_schema={"query": "string", "limit?": "integer"},
-            handler=lambda **kw: _web_search_stub(llm=llm, **kw),
-        ))
+    # web.search picks the best provider available at call time. DDG is the
+    # zero-config floor, Tavily/Brave/Serper take over if a key is set.
+    has_premium = any(
+        os.environ.get(k) for k in ("TAVILY_API_KEY", "BRAVE_API_KEY", "SERPER_API_KEY")
+    )
+    _REGISTRY.register(Tool(
+        name="web.search",
+        title="Web search",
+        description=(
+            "Search the public web. Returns real results (DuckDuckGo by default; "
+            "Tavily/Brave/Serper used automatically if their API key is set)."
+            if not has_premium else
+            "Search the public web (provider auto-selected from configured keys: "
+            "Tavily > Brave > Serper > DuckDuckGo)."
+        ),
+        risk="network",
+        requires_approval=False,
+        params_schema={"query": "string", "limit?": "integer"},
+        handler=_web_search,
+        examples=[
+            "current weather in New York City",
+            "best MCP servers for filesystem access",
+        ],
+    ))
+
+    _REGISTRY.register(Tool(
+        name="web.fetch",
+        title="Fetch a URL",
+        description=(
+            "Download a URL and return readable text. Strips HTML, extracts "
+            "<title> / meta description, can return outgoing links. JSON URLs "
+            "are parsed automatically."
+        ),
+        risk="network",
+        requires_approval=False,
+        params_schema={"url": "string", "max_bytes?": "integer", "extract_links?": "boolean"},
+        handler=_web_fetch,
+        examples=["https://example.com"],
+    ))
 
     _REGISTRY.register(Tool(
         name="data.parse_csv",
@@ -499,4 +497,117 @@ def register_builtin_tools(llm: LLMClient) -> ToolRegistry:
     ))
 
     discover_cli_tools(_REGISTRY)
+
+    # Tool Discovery v0: tools.discover / tools.install / tools.uninstall.
+    # Only registered when the lifespan passed in a manager + capability registry.
+    if mcp_manager is not None and capability_registry is not None:
+        from .discovery import discover_tools, install_mcp_server, uninstall_mcp_server
+
+        async def _tools_discover(
+            *,
+            query: str,
+            limit_per_source: int = 6,
+            audit_top: int = 0,
+        ) -> dict[str, Any]:
+            return await discover_tools(
+                query,
+                limit_per_source=int(limit_per_source),
+                audit_top=int(audit_top),
+                llm=llm if int(audit_top) > 0 else None,
+            )
+
+        async def _tools_install(
+            *,
+            alias: str,
+            command: str,
+            args: list[str] | None = None,
+            env: dict[str, str] | None = None,
+            trust_score: float | None = None,
+            install_type: str = "npx",
+            source_url: str | None = None,
+            description: str | None = None,
+        ) -> dict[str, Any]:
+            return await install_mcp_server(
+                manager=mcp_manager,
+                registry=capability_registry,
+                alias=alias,
+                command=command,
+                args=list(args or []),
+                env=dict(env or {}),
+                trust_score=trust_score,
+                install_type=install_type,
+                source_url=source_url,
+                description=description,
+            )
+
+        async def _tools_uninstall(*, alias: str) -> dict[str, Any]:
+            return await uninstall_mcp_server(
+                manager=mcp_manager,
+                registry=capability_registry,
+                alias=alias,
+            )
+
+        _REGISTRY.register(Tool(
+            name="tools.discover",
+            title="Discover new tools",
+            description=(
+                "Search the public MCP ecosystem (GitHub topic:mcp-server + npm) "
+                "for tools that match the query. Returns candidates with a trust "
+                "score and suggested install command. Calling this never installs "
+                "anything — use tools.install to spawn a candidate. Pass "
+                "audit_top=3 to LLM-audit the top three READMEs for permissions "
+                "and trustworthiness (slower but a much better trust signal)."
+            ),
+            risk="network",
+            requires_approval=False,
+            params_schema={
+                "query": "string",
+                "limit_per_source?": "integer",
+                "audit_top?": "integer",
+            },
+            handler=_tools_discover,
+            examples=[
+                "filesystem",
+                "slack",
+                "github issue tracker",
+            ],
+        ))
+
+        _REGISTRY.register(Tool(
+            name="tools.install",
+            title="Install an MCP server",
+            description=(
+                "Spawn an MCP server as a child process and register every tool it "
+                "advertises. Requires explicit human approval for each install. "
+                "On success the new tools appear as mcp.<alias>.<tool_name>."
+            ),
+            risk="destructive",  # spawning a subprocess = destructive class → approval each time
+            requires_approval=True,
+            params_schema={
+                "alias": "string",
+                "command": "string",
+                "args?": "array<string>",
+                "env?": "object",
+                "trust_score?": "number",
+                "install_type?": "string",
+                "source_url?": "string",
+                "description?": "string",
+            },
+            handler=_tools_install,
+        ))
+
+        _REGISTRY.register(Tool(
+            name="tools.uninstall",
+            title="Uninstall an MCP server",
+            description=(
+                "Stop a running MCP server, unregister every tool it advertised "
+                "(mcp.<alias>.*), and drop the install record from the persistent "
+                "capability registry. Requires explicit human approval."
+            ),
+            risk="destructive",
+            requires_approval=True,
+            params_schema={"alias": "string"},
+            handler=_tools_uninstall,
+        ))
+
     return _REGISTRY

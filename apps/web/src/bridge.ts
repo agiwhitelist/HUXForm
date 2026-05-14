@@ -67,6 +67,7 @@ export class Bridge {
     this.es.onmessage = handler;
     [
       "turn_created", "planning_started", "plan_ready", "awaiting_steer",
+      "research_started", "research_step", "research_done", "research_failed",
       "codegen_started", "ui_ready", "regenerating", "running",
       "tool_called", "tool_result", "tool_error", "tool_denied", "tool_dry_run",
       "approval_required", "state_patch", "log", "narration",

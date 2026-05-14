@@ -63,6 +63,11 @@ function Doctor {
     } else {
         Write-Bad "  ✗"; Write-Host "  .env is missing or has no API key (run: .\bin\huxform.ps1 setup)"
     }
+    if (Test-Path (Join-Path $Root ".agui\mcp.json")) {
+        Write-Good "  ✓"; Write-Host "  .agui\mcp.json present"
+    } else {
+        Write-Dim "  ·  no .agui\mcp.json yet — will be seeded from example on first setup"; Write-Host ""
+    }
     Write-Host ""
 }
 
@@ -96,14 +101,35 @@ AGUI_LLM_API_KEY=$key
 AGUI_LLM_MAX_TOKENS=4096
 AGUI_LLM_TEMPERATURE=0.6
 AGUI_DATA_DIR=.huxform-data
+
+# CLI tools (git, curl, jq, gh, ...) are registered as tools the model can call.
+# Every CLI call still requires explicit approval through the bridge.
+AGUI_ENABLE_CLI=1
+
+# Optional web search providers — DuckDuckGo is the zero-config default.
+# Set any of the keys below to use that provider instead.
+# TAVILY_API_KEY=
+# BRAVE_API_KEY=
+# SERPER_API_KEY=
 "@ | Set-Content -Path $EnvFile -Encoding UTF8
     Write-Good "  ✓"; Write-Host "  wrote .env"
+}
+
+function Seed-MCPConfig {
+    $mcpDir  = Join-Path $Root ".agui"
+    $mcpReal = Join-Path $mcpDir "mcp.json"
+    $mcpTmpl = Join-Path $mcpDir "mcp.json.example"
+    if (Test-Path $mcpReal) { return }
+    if (-not (Test-Path $mcpTmpl)) { return }
+    Copy-Item $mcpTmpl $mcpReal -Force
+    Write-Good "  ✓"; Write-Host "  seeded .agui\mcp.json (edit to enable/disable MCP servers)"
 }
 
 function Setup {
     Banner
     Write-Dim "  setup"; Write-Host ""; Write-Host ""
     Prompt-Env
+    Seed-MCPConfig
     Write-Host ""
     $py = Resolve-Python
     Write-Dim "  api · creating Python venv"; Write-Host ""

@@ -1,0 +1,3 @@
+HUXForm sandboxed workspace. The filesystem MCP server is rooted here.
+Anything you (or HUXForm) write into this folder is visible to the agent;
+anything outside is not.

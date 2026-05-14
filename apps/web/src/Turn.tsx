@@ -93,6 +93,18 @@ export function Stage(props: {
           setTurn((p) => ({ ...p, status: "generating" }));
         } else if (ev.type === "running") {
           setTurn((p) => ({ ...p, status: "running" }));
+        } else if (ev.type === "research_done") {
+          setTurn((p) => ({
+            ...p,
+            state: {
+              ...(p.state || {}),
+              research: {
+                summary: (ev as any).summary ?? "",
+                steps: ((p.state as any)?.research?.steps) ?? [],
+                stopped: (ev as any).stopped ?? "",
+              },
+            },
+          }));
         } else if (ev.type === "final_result") {
           setTurn((p) => ({
             ...p,
@@ -125,8 +137,9 @@ export function Stage(props: {
       tools: props.tools,
       goal: turn.user_message,
       files: turn.files,
+      research: (turn.state as any)?.research ?? null,
     });
-  }, [turn.plan, props.tools, turn.user_message, turn.files]);
+  }, [turn.plan, props.tools, turn.user_message, turn.files, turn.state]);
 
   // load iframe src once UI is ready
   useEffect(() => {

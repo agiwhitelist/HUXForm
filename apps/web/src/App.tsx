@@ -526,20 +526,100 @@ function ApprovalOverlay(props: {
   onResolve: (req: ApprovalRequest, ok: boolean) => void;
 }) {
   const req = props.requests[0];
+  const d = (req.details as Record<string, unknown> | null) || null;
+  const tool = (d?.tool as string) || "";
+  const risk = (d?.risk as string) || "";
+  const description = (d?.description as string) || "";
+  const params = (d?.params_preview as Record<string, unknown>) || null;
+
+  const isInstall = tool === "tools.install";
+  const isUninstall = tool === "tools.uninstall";
+  const isDestructive = risk === "destructive" || risk === "secret";
+  const high = isInstall || isUninstall || isDestructive || risk === "filesystem";
+
+  const trust = typeof params?.trust_score === "number" ? (params.trust_score as number) : null;
+  const installCmd = isInstall && params
+    ? `${(params.command as string) || ""} ${Array.isArray(params.args) ? (params.args as string[]).join(" ") : ""}`.trim()
+    : "";
+  const installAlias = (params?.alias as string) || "";
+  const installSource = (params?.source_url as string) || "";
+  const installDescription = (params?.description as string) || "";
+
   return (
     <div className="approval-overlay">
-      <div className="approval-card">
-        <div className="approval-h">Approval required</div>
-        <div className="approval-label">{req.label}</div>
-        {req.details ? (
-          <pre className="approval-details">
-            {JSON.stringify(req.details, null, 2)}
-          </pre>
+      <div className={`approval-card ${high ? "is-high-risk" : ""}`}>
+        <div className="approval-h">
+          <span className={`approval-pill ${high ? "high" : "low"}`}>
+            {isInstall ? "install · approval required"
+              : isUninstall ? "uninstall · approval required"
+              : isDestructive ? "destructive · approval required"
+              : risk
+                ? `${risk} · approval required`
+                : "approval required"}
+          </span>
+        </div>
+
+        <div className="approval-label">
+          {isInstall ? `Install MCP server "${installAlias || tool}"`
+            : isUninstall ? `Uninstall MCP server "${installAlias || tool}"`
+            : req.label}
+        </div>
+
+        {description && !isInstall ? (
+          <p className="approval-desc">{description}</p>
         ) : null}
+
+        {isInstall ? (
+          <div className="approval-install">
+            <div className="approval-field">
+              <div className="approval-field-k">command</div>
+              <code className="approval-field-v approval-cmd">{installCmd || "(none)"}</code>
+            </div>
+            {trust != null ? (
+              <div className="approval-field">
+                <div className="approval-field-k">trust score</div>
+                <div className="approval-field-v">
+                  <span className={`approval-trust ${trust >= 0.7 ? "good" : trust >= 0.45 ? "ok" : "low"}`}>
+                    {trust.toFixed(2)}
+                  </span>
+                  <span className="approval-trust-note">
+                    {trust >= 0.7 ? "official or widely trusted"
+                      : trust >= 0.45 ? "community — review the source"
+                      : "low signal — read the README before approving"}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+            {installSource ? (
+              <div className="approval-field">
+                <div className="approval-field-k">source</div>
+                <a className="approval-field-v approval-link" href={installSource} target="_blank" rel="noopener noreferrer">{installSource}</a>
+              </div>
+            ) : null}
+            {installDescription ? (
+              <div className="approval-field">
+                <div className="approval-field-k">summary</div>
+                <div className="approval-field-v">{installDescription}</div>
+              </div>
+            ) : null}
+            <p className="approval-warn">
+              This spawns a subprocess and registers every tool the server advertises.
+              Only approve sources you trust.
+            </p>
+          </div>
+        ) : params && Object.keys(params).length ? (
+          <pre className="approval-details">{JSON.stringify(params, null, 2)}</pre>
+        ) : req.details ? (
+          <pre className="approval-details">{JSON.stringify(req.details, null, 2)}</pre>
+        ) : null}
+
         <div className="approval-actions">
           <button onClick={() => props.onResolve(req, false)}>Deny</button>
-          <button className="primary" onClick={() => props.onResolve(req, true)}>
-            Approve
+          <button
+            className={`primary ${high ? "danger" : ""}`}
+            onClick={() => props.onResolve(req, true)}
+          >
+            {isInstall ? "Install" : isUninstall ? "Uninstall" : "Approve"}
           </button>
         </div>
       </div>

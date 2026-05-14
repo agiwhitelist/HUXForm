@@ -26,6 +26,7 @@ BRIDGE_DOCS = dedent("""
 The runtime exposes window.agui:
 
   agui.plan, agui.tools, agui.goal, agui.taskId, agui.files
+  agui.research                          // server-side researcher results (see below)
 
   await agui.callTool(name, params)        // run a registered tool
   await agui.askApproval(label, details)   // request a one-off human OK (returns boolean)
@@ -45,6 +46,22 @@ The runtime exposes window.agui:
                                            // is automatically attached to this turn so you
                                            // can immediately call agui.readFile(id) or pass
                                            // it to tools.
+
+agui.research shape (already gathered for you by the server before this UI
+was rendered — render FROM it, do not invent data):
+
+  {
+    summary: "one paragraph describing what was learned",
+    steps:   [ { tool, params, reason, ok, result, error } ],
+    stopped: "done" | "budget" | "no_safe_tool" | "loop"
+  }
+
+  Typical patterns:
+    - web.search result → steps[0].result.results is a list of { title, url, snippet }
+    - web.fetch  result → steps[i].result has { url, title, text, description }
+    - data.parse_csv   → { columns, rows, row_count }
+    - data.find_duplicates → { groups: [ { key, count, rows } ] }
+    - files.read       → { text } or { base64 }
 
 How to take a file from the user (the iframe IS allowed forms, so a
 plain <input type="file"> works — wire its onchange to agui.uploadFile):
@@ -93,6 +110,13 @@ Three failure modes you must avoid above everything else:
      bind every interactive element to a real action before you ship the
      document.
 
+  4. Hallucinated content. If `agui.research` (the server-side researcher
+     output) is non-empty, you MUST render the document from those facts —
+     names, URLs, numbers, snippets, rows. Do NOT invent plausible-looking
+     data. If a section needs data that wasn't fetched, leave a clear empty
+     state ("no data yet — agent will fill this") and either call the right
+     tool yourself in the boot script or wait for events.
+
 Hard technical rules:
   * Output ONLY one complete HTML document, starting with <!DOCTYPE html>.
     No markdown fences, no commentary before or after.
@@ -108,8 +132,16 @@ Hard technical rules:
     reach the backend, tools, or files is window.agui (documented below).
     Browser file pickers (<input type="file">) DO work in this sandbox;
     wire onchange to agui.uploadFile to send the file to the backend.
-  * Subscribe to agui.onEvent at boot. Render plan steps, tool calls,
-    state patches and the final result LIVE. Never show a static page.
+  * Read agui.research at boot. Quote real facts from steps[*].result and
+    summary inside the document. Subscribe to agui.onEvent at boot too — render
+    plan steps, tool calls, state patches and the final result LIVE. Never
+    show a static page.
+  * If `agui.research` is empty AND the task needs real data
+    (search, fetch, list, compare, monitor, etc), call the appropriate
+    tool yourself in the boot script — e.g.
+        const r = await agui.callTool('web.search', {{ query: agui.goal, limit: 8 }});
+        renderResults(r.results);
+    Do NOT show stale or invented data while waiting.
   * If plan.needs_user_input is true OR agui.files is empty for a task
     that obviously requires data (csv_dedup, audit, parse_*, etc.), build
     a real file picker bound to agui.uploadFile, plus any sliders /
@@ -187,6 +219,7 @@ class UIGenerator:
         files: list[dict] | None = None,
         refine_note: str | None = None,
         previous_html: str | None = None,
+        research: dict | None = None,
     ) -> tuple[str, dict]:
         brief = plan.visual_brief
         if brief is None:
@@ -225,6 +258,7 @@ class UIGenerator:
             "plan": plan.to_dict(),
             "files": files or [],
             "tools": self.registry.bridge_schema(),
+            "research": research or {},
         }
         instruction = (
             "Build the HUXForm experience for this task.\n\n"

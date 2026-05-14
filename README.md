@@ -14,15 +14,29 @@
 
 > **HUXForm** is a generative human-experience runtime for AI agents.
 > You describe a task in plain language. HUXForm **directs** a one-off visual
-> concept for it, generates a self-contained mini-app on the fly, and runs it
+> concept for it, **researches** the task with real tools (search, fetch, MCP,
+> CLI, OpenAPI…), generates a self-contained mini-app on the fly, and runs it
 > inside a sandboxed stage that talks back through a safe bridge.
 
 Not a chat. Not a dashboard kit. Not a component library. Every task gets its
 own interface — designed for that task and forgotten when it's done.
 
 ```text
-Intent → Plan + Visual Brief → Generated mini-app → Bridged tools
+Intent → Plan + Visual Brief → Research (real tool calls) → Generated mini-app → Bridged tools
 ```
+
+Two things make HUXForm not just a UI generator:
+
+1. **Server-side ReAct loop.** Before codegen runs, a `Researcher` LLM
+   sees the plan, the tool catalog, and your goal, then *actually calls*
+   read/network tools (`web.search`, `web.fetch`, `mcp.*`, `files.read`, …)
+   until it has enough facts. The mini-app renders from those facts —
+   not from the model's imagination.
+2. **Live tool discovery.** Built-in `tools.discover` searches the public
+   MCP ecosystem (npm `@modelcontextprotocol/*`, GitHub `topic:mcp-server`)
+   and returns ranked candidates with install commands and trust scores.
+   `tools.install` (approval-gated, every time) spawns a candidate as an
+   MCP server and registers every tool it advertises.
 
 ---
 
@@ -47,12 +61,12 @@ moment.
   <table>
     <tr>
       <td align="center" width="50%">
-        <img src="./assets/shot-weather.png" alt="Meteorological station readout" width="100%"/>
-        <sub><b>status_view · meteorological station readout</b><br/>"what's the weather in New York?" — cold observatory palette, METAR string</sub>
+        <img src="./assets/shot-weather.png" alt="Meteorological station card" width="100%"/>
+        <sub><b>explainer · meteo station card</b><br/>"what is the current weather in New York City?" — Researcher called <code>web.search</code>, parsed real conditions from AccuWeather + Weather Underground; inline-SVG sun/cloud, real 56°F/63% humidity baked in</sub>
       </td>
       <td align="center" width="50%">
-        <img src="./assets/shot-mcp.png" alt="MCP technical manual" width="100%"/>
-        <sub><b>explainer · technical manual</b><br/>"explain Model Context Protocol" — paper specimen, justified spec text</sub>
+        <img src="./assets/shot-discover.png" alt="Filesystem tool scout report" width="100%"/>
+        <sub><b>report · field assessment</b><br/>"find me the 5 best MCP servers for filesystem access" — Researcher called <code>tools.discover</code> + <code>web.search</code>; rendered as a botanist's field notebook with real trust scores and download counts</sub>
       </td>
     </tr>
     <tr>
@@ -156,10 +170,13 @@ docker build --target production -t huxform .   # prod single image (nginx + uvi
 | Module                              | Role                                                                                                   |
 |-------------------------------------|--------------------------------------------------------------------------------------------------------|
 | `apps/api/src/director.py`          | One LLM pass → presentation plan + visual brief (palette, typography, layout, motion, banned defaults) |
-| `apps/api/src/codegen.py`           | UI Generator. Consumes the brief, emits one self-contained HTML document.                              |
-| `apps/api/src/runtime_stub.py`      | `window.agui.*` shim injected into every generated document.                                           |
+| `apps/api/src/researcher.py`        | Server-side ReAct loop. Calls read/network tools before codegen; results land in `turn.state.research`.|
+| `apps/api/src/codegen.py`           | UI Generator. Consumes the brief + research and emits one self-contained HTML document.                |
+| `apps/api/src/runtime_stub.py`      | `window.agui.*` shim injected into every generated document (exposes `agui.research`).                 |
 | `apps/api/src/executor.py`          | Tool Broker + Permission Layer + dry-run + approvals.                                                  |
-| `apps/api/src/tools.py`             | Built-in capabilities (LLM, data.*, web.search, files.read, task.*, optional cli.*).                   |
+| `apps/api/src/tools.py`             | Built-in capabilities (LLM, data.\*, web.search, web.fetch, files.read, task.\*, tools.discover/install, optional cli.\*). |
+| `apps/api/src/web_search.py`        | Multi-provider web search: Tavily → Brave → Serper → DuckDuckGo (default, no key) → SearXNG.           |
+| `apps/api/src/discovery.py`         | Tool Discovery + Capability Registry. `discover_tools()` ranks MCP candidates; `install_mcp_server()` spawns one. |
 | `apps/api/src/mcp_client.py`        | Stdio MCP-client manager. Auto-registers each MCP tool as `mcp.<alias>.<name>`.                        |
 | `apps/api/src/openapi_adapter.py`   | Loads any OpenAPI 3.x spec, exposes every operation as `openapi.<alias>.<op>`.                         |
 | `apps/api/src/narrator.py`          | Turns raw events into single-sentence human commentary.                                                |
@@ -198,6 +215,7 @@ docker build --target production -t huxform .   # prod single image (nginx + uvi
 
 ```js
 agui.plan, agui.tools, agui.goal, agui.taskId, agui.files
+agui.research                              // { summary, steps: [{tool, params, result, ok, ...}], stopped }
 
 await agui.callTool(name, params)          // run a registered tool
 await agui.uploadFile(file)                // upload a File/Blob → auto-attached to the turn
@@ -211,6 +229,14 @@ agui.toast(message, kind)
 agui.onEvent(handler)
 ```
 
+`agui.research` is pre-filled by the server-side Researcher loop, so the
+mini-app can render facts directly without an extra round-trip:
+
+```js
+const r = agui.research?.steps?.[0]?.result;
+if (r?.results?.length) renderList(r.results);
+```
+
 The sandbox is `allow-scripts allow-forms` only — **no** `allow-same-origin`,
 **no** unrestricted network, **no** parent DOM access. The bridge is the
 only escape hatch. Direct `fetch('/api/...')` from generated code is
@@ -222,19 +248,22 @@ transparently rerouted through the bridge so legacy scaffolds still work.
 
 HUXForm is provider-agnostic. Pick the protocol your provider speaks:
 
-| Var                   | Default                              | Notes                                  |
-|-----------------------|--------------------------------------|----------------------------------------|
-| `AGUI_LLM_PROTOCOL`   | `anthropic`                          | `anthropic` (Messages) or `openai`     |
-| `AGUI_LLM_BASE_URL`   | `https://api.anthropic.com`          | Provider base URL — point anywhere.    |
-| `AGUI_LLM_MODEL`      | (provider model id)                  | Any model your provider exposes.       |
-| `AGUI_LLM_API_KEY`    | —                                    | API key.                               |
-| `AGUI_LLM_MAX_TOKENS` | `4096`                               |                                        |
-| `AGUI_LLM_TEMPERATURE`| `0.6`                                |                                        |
-| `TAVILY_API_KEY`      | —                                    | Real `web.search` if set.              |
-| `AGUI_MCP_CONFIG`     | `.agui/mcp.json`                     | Optional MCP server config.            |
-| `AGUI_DATA_DIR`       | `.huxform-data`                      | SQLite + uploads live here.            |
-| `AGUI_ENABLE_CLI`     | unset                                | Enables `cli.*` host-CLI tools.        |
-| `AGUI_CLI_ALLOWLIST`  | unset                                | Optional `:`-separated allowlist.      |
+| Var                   | Default                              | Notes                                                            |
+|-----------------------|--------------------------------------|------------------------------------------------------------------|
+| `AGUI_LLM_PROTOCOL`   | `anthropic`                          | `anthropic` (Messages) or `openai`                               |
+| `AGUI_LLM_BASE_URL`   | `https://api.anthropic.com`          | Provider base URL — point anywhere.                              |
+| `AGUI_LLM_MODEL`      | (provider model id)                  | Any model your provider exposes.                                 |
+| `AGUI_LLM_API_KEY`    | —                                    | API key.                                                         |
+| `AGUI_LLM_MAX_TOKENS` | `4096`                               |                                                                  |
+| `AGUI_LLM_TEMPERATURE`| `0.6`                                |                                                                  |
+| `TAVILY_API_KEY`      | —                                    | Optional. `web.search` already works without a key (DuckDuckGo). |
+| `BRAVE_API_KEY`       | —                                    | Optional. Brave Search API — 2k req/mo free.                     |
+| `SERPER_API_KEY`      | —                                    | Optional. Google results via serper.dev free tier.               |
+| `GITHUB_TOKEN`        | —                                    | Optional. Raises GitHub API limit used by `tools.discover`.      |
+| `AGUI_MCP_CONFIG`     | `.agui/mcp.json`                     | MCP server config (seeded from `.agui/mcp.json.example`).        |
+| `AGUI_DATA_DIR`       | `.huxform-data`                      | SQLite + uploads + capability registry live here.                |
+| `AGUI_ENABLE_CLI`     | `1` (set by bootstrap)               | Registers `cli.*` host-CLI tools. Every call needs approval.     |
+| `AGUI_CLI_ALLOWLIST`  | unset                                | Optional `:`-separated allowlist.                                |
 
 > HUXForm doesn't care which model you bring. Anthropic, OpenAI, MiniMax,
 > Groq, OpenRouter, Together, AWS Bedrock proxy, Ollama — anything that
@@ -243,24 +272,70 @@ HUXForm is provider-agnostic. Pick the protocol your provider speaks:
 
 ---
 
-## Tool discovery
+## Tools
+
+### Built-in catalog
+
+`/api/tools` returns the live registry. Out of the box:
+
+| Tool                | Risk         | What it does                                                                    |
+|---------------------|--------------|---------------------------------------------------------------------------------|
+| `llm.ask`           | read         | Send a free-form prompt to HUXForm's LLM. Short reasoning / copywriting.        |
+| `llm.structured`    | read         | Ask the LLM for a JSON value matching a schema hint.                            |
+| `web.search`        | network      | Real web search. DuckDuckGo by default; Tavily/Brave/Serper if their key is set.|
+| `web.fetch`         | network      | GET a URL and return readable text + title + meta description (JSON auto-parsed).|
+| `data.parse_csv`    | read         | Parse CSV text into typed columns + rows (auto-sniffs delimiter).               |
+| `data.find_duplicates` | read      | Group rows by chosen keys, return duplicate groups.                             |
+| `data.summarize`    | read         | Per-column stats: non-empty, distinct, top values, min/max/mean.                |
+| `files.read`        | read         | Read a file the user attached to this turn.                                     |
+| `tools.discover`    | network      | Search MCP ecosystem (GitHub topic:mcp-server + npm). Returns trust-ranked candidates. |
+| `tools.install`     | destructive  | Approval-gated. Spawn an MCP server, register every tool it advertises.         |
+| `task.set_state`    | write        | Merge a JSON patch into the persistent task state.                              |
+| `task.final_result` | write        | Mark the turn done with a result.                                               |
+| `task.log`          | write        | Emit a log event into the task stream.                                          |
+| `cli.<bin>`         | filesystem / destructive | Wrappers for host binaries (`git`, `gh`, `curl`, `jq`, …) — every call needs approval. |
 
 ### MCP servers
 
-Drop a `.agui/mcp.json` at repo root:
+The bootstrap seeds `.agui/mcp.json` from `.agui/mcp.json.example`:
 
 ```json
 {
   "servers": [
-    { "alias": "fs",   "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"] },
-    { "alias": "git",  "command": "uvx", "args": ["mcp-server-git", "--repository", "."] }
+    { "alias": "fs",    "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"] },
+    { "alias": "fetch", "command": "uvx", "args": ["mcp-server-fetch"] },
+    { "alias": "git",   "command": "uvx", "args": ["mcp-server-git", "--repository", "."] }
   ]
 }
 ```
 
+`./workspace` is a sandboxed directory committed with a `.keep` marker —
+the filesystem MCP server is rooted there, so generated UIs that write
+files can't escape it.
+
 On boot HUXForm spawns each server, calls `tools/list`, and registers every
 tool as `mcp.<alias>.<name>` — immediately callable from any generated UI
 via `agui.callTool(...)`.
+
+### Live tool discovery + install (the idea.md flow)
+
+The agent can find new tools at runtime:
+
+```js
+// inside a generated UI — or just call from /api directly
+const r = await agui.callTool('tools.discover', { query: 'slack' });
+//  → { candidates: [{ source, id, install_suggestion: { command, args, alias },
+//                     trust_score, description, ... }, ...] }
+
+// install the top candidate (this fires an approval_required event
+// the user must accept in the host shell):
+await agui.callTool('tools.install', r.candidates[0].install_suggestion);
+// → spawns the MCP server, registers tools as mcp.<alias>.<tool>
+//   and persists the install to .huxform-data/capability_registry.json
+```
+
+The `CapabilityRegistry` survives restarts — installed servers are
+re-spawned on the next boot, so the agent's tool catalog grows over time.
 
 ### OpenAPI
 
@@ -276,12 +351,6 @@ curl -X POST http://localhost:8001/api/tools/openapi -H 'content-type: applicati
 
 Every operation becomes a callable tool: `openapi.petstore.findPetsByStatus`,
 etc.
-
-### Host CLI tools
-
-Set `AGUI_ENABLE_CLI=1` and optional `AGUI_CLI_ALLOWLIST=git:gh:jq`.
-A curated set of common binaries (`git`, `gh`, `curl`, `jq`, `docker`,
-`kubectl`, …) becomes available as `cli.<name>` tools, gated by approval.
 
 ---
 
@@ -351,6 +420,12 @@ You can always check state with `./bin/huxform doctor`.
 
 ## Roadmap
 
+- [x] Server-side Researcher loop — call real tools before codegen
+- [x] Real web search by default (no API key required)
+- [x] `tools.discover` + `tools.install` for live MCP discovery
+- [x] Capability Registry persistence
+- [ ] LLM-graded trust scoring (read candidate README, classify permissions)
+- [ ] `tools.uninstall` + a UI to manage installed servers
 - [ ] Streaming partial codegen (watch the document being drawn line by line)
 - [ ] LLM router for "refine current turn vs. open a new turn"
 - [ ] HTTP/SSE transport for MCP (right now: stdio only)
