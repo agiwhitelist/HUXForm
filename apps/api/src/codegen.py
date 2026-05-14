@@ -14,12 +14,18 @@ the iframe stage. Two design rules above all else:
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from textwrap import dedent
+from typing import Awaitable, Callable
 
 from .llm import LLMClient, extract_html
 from .tasks import TaskPlan
 from .tools import ToolRegistry
+
+
+OnChunk = Callable[[str], Awaitable[None]]
 
 
 BRIDGE_DOCS = dedent("""
@@ -29,6 +35,14 @@ The runtime exposes window.agui:
   agui.research                          // server-side researcher results (see below)
 
   await agui.callTool(name, params)        // run a registered tool
+  await agui.evolve(refineNote)            // ask HUXForm to redesign THIS interface
+                                           //   refineNote is a sentence like
+                                           //   "show me the same data as a sparkline
+                                           //    grid" or "switch to a comparison
+                                           //    table; keep the palette". The server
+                                           //    regenerates the HTML in place,
+                                           //    preserves task state, and the iframe
+                                           //    swaps to the new document live.
   await agui.askApproval(label, details)   // request a one-off human OK (returns boolean)
   agui.setState(patch)                     // merge a JSON patch into task state
   agui.getState()                          // current state snapshot (sync, cached)
@@ -116,6 +130,16 @@ Three failure modes you must avoid above everything else:
      data. If a section needs data that wasn't fetched, leave a clear empty
      state ("no data yet — agent will fill this") and either call the right
      tool yourself in the boot script or wait for events.
+
+  5. Static dead-ends. When the user wants a deeper / different view than
+     the one you drew (e.g. clicks "show me as a chart instead", "compare
+     side by side", "give me a darker palette", "drill into row 3"), DO
+     NOT re-implement that view yourself with toggles. Call
+     `await agui.evolve("<one short sentence describing the new view>")`
+     and HUXForm will redraw the whole document around the same task
+     state. This is how the interface stays alive instead of accumulating
+     dead toggles. Bind any explicit "redesign this" affordance to evolve;
+     never paper over with `display:none`.
 
 Hard technical rules:
   * Output ONLY one complete HTML document, starting with <!DOCTYPE html>.
@@ -220,6 +244,7 @@ class UIGenerator:
         refine_note: str | None = None,
         previous_html: str | None = None,
         research: dict | None = None,
+        on_chunk: OnChunk | None = None,
     ) -> tuple[str, dict]:
         brief = plan.visual_brief
         if brief is None:
@@ -283,6 +308,17 @@ class UIGenerator:
             "card-grid dashboard. Return the full HTML document now."
         )
         user_msg = instruction
+        if on_chunk is not None:
+            text, usage = await self._stream_with_chunks(
+                system=system,
+                user_msg=user_msg,
+                on_chunk=on_chunk,
+                temperature=0.85,
+                max_tokens=16384,
+            )
+            html = extract_html(text)
+            return html, usage
+
         reply = await self.llm.complete(
             system=system,
             messages=[{"role": "user", "content": user_msg}],
@@ -292,3 +328,48 @@ class UIGenerator:
         html = extract_html(reply.text)
         usage = (reply.raw or {}).get("usage") or {}
         return html, usage
+
+    # --------------------------------------------------------------
+    # Streaming helper — called by generate() when on_chunk is given.
+    # Buffers token deltas from the LLM and fires on_chunk no more
+    # often than every ~120ms / ~400 chars so the SSE stream stays
+    # readable. Returns the full accumulated text + a best-effort
+    # usage stub (token counts aren't available until the stream
+    # closes for most providers).
+    # --------------------------------------------------------------
+
+    async def _stream_with_chunks(
+        self,
+        *,
+        system: str,
+        user_msg: str,
+        on_chunk: OnChunk,
+        temperature: float,
+        max_tokens: int,
+    ) -> tuple[str, dict]:
+        buf_parts: list[str] = []
+        last_flush_at = time.monotonic()
+        last_flush_len = 0
+        async for piece in self.llm.complete_stream(
+            system=system,
+            messages=[{"role": "user", "content": user_msg}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        ):
+            buf_parts.append(piece)
+            now = time.monotonic()
+            total = sum(len(p) for p in buf_parts)
+            if total - last_flush_len >= 400 or (now - last_flush_at) >= 0.12:
+                try:
+                    await on_chunk("".join(buf_parts))
+                except Exception:
+                    pass
+                last_flush_at = now
+                last_flush_len = total
+        text = "".join(buf_parts)
+        # Final flush so the host shell can switch to the real iframe
+        try:
+            await on_chunk(text)
+        except Exception:
+            pass
+        return text, {}

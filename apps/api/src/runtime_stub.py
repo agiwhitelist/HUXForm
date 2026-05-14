@@ -92,10 +92,21 @@ RUNTIME_STUB = """<script>(function(){
       });
     });
   }
+  function evolve(refineNote){
+    if (!refineNote || typeof refineNote !== 'string') {
+      return Promise.reject(new Error('agui.evolve: refine_note is required'));
+    }
+    return new Promise(function(resolve, reject){
+      var id = 'e' + (nextId++);
+      pending[id] = { resolve: resolve, reject: reject };
+      send({ kind: 'evolve', id: id, refine_note: refineNote });
+    });
+  }
   window.agui = {
     plan: null, tools: [], goal: '', taskId: '', files: [],
     research: { summary: '', steps: [], stopped: '' },
     callTool: call,
+    evolve: evolve,
     setState: function(patch){ return call('task.set_state', { patch: patch }); },
     getState: function(){ return Object.assign({}, stateSnapshot); },
     finalResult: function(value){ return call('task.final_result', { result: value }); },

@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 
@@ -131,6 +131,123 @@ class LLMClient:
         message = choice.get("message", {}) or {}
         text = message.get("content") or ""
         return LLMReply(text=text.strip(), raw=data)
+
+    # ------------------------------------------------------------------
+    # Streaming — yields text chunks as the model emits them, then the
+    # final LLMReply via the closure on `final`. Used by codegen to push
+    # progressive HTML into the iframe while the LLM is still drawing.
+    # ------------------------------------------------------------------
+
+    async def complete_stream(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> AsyncIterator[str]:
+        cfg = self.cfg
+        if not cfg.api_key:
+            raise RuntimeError("LLM API key is not configured.")
+        if cfg.protocol == "anthropic":
+            async for chunk in self._stream_anthropic(system, messages, max_tokens, temperature):
+                yield chunk
+            return
+        if cfg.protocol == "openai":
+            async for chunk in self._stream_openai(system, messages, max_tokens, temperature):
+                yield chunk
+            return
+        raise RuntimeError(f"Unsupported protocol {cfg.protocol!r}")
+
+    async def _stream_anthropic(
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        max_tokens: int | None,
+        temperature: float | None,
+    ) -> AsyncIterator[str]:
+        cfg = self.cfg
+        url = f"{cfg.base_url}/v1/messages"
+        payload = {
+            "model": cfg.model,
+            "system": system,
+            "max_tokens": max_tokens or cfg.max_tokens,
+            "temperature": temperature if temperature is not None else cfg.temperature,
+            "messages": messages,
+            "stream": True,
+        }
+        headers = {
+            "content-type": "application/json",
+            "x-api-key": cfg.api_key,
+            "anthropic-version": "2023-06-01",
+            "authorization": f"Bearer {cfg.api_key}",
+            "accept": "text/event-stream",
+        }
+        async with self._client.stream("POST", url, headers=headers, json=payload) as r:
+            r.raise_for_status()
+            async for line in r.aiter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if not data_str:
+                    continue
+                try:
+                    evt = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                etype = evt.get("type")
+                if etype == "content_block_delta":
+                    delta = evt.get("delta") or {}
+                    if delta.get("type") == "text_delta":
+                        text = delta.get("text") or ""
+                        if text:
+                            yield text
+                elif etype == "message_stop":
+                    return
+
+    async def _stream_openai(
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        max_tokens: int | None,
+        temperature: float | None,
+    ) -> AsyncIterator[str]:
+        cfg = self.cfg
+        url = f"{cfg.base_url}/chat/completions"
+        all_msgs = [{"role": "system", "content": system}] + messages
+        payload = {
+            "model": cfg.model,
+            "messages": all_msgs,
+            "max_tokens": max_tokens or cfg.max_tokens,
+            "temperature": temperature if temperature is not None else cfg.temperature,
+            "stream": True,
+        }
+        headers = {
+            "content-type": "application/json",
+            "authorization": f"Bearer {cfg.api_key}",
+            "accept": "text/event-stream",
+        }
+        async with self._client.stream("POST", url, headers=headers, json=payload) as r:
+            r.raise_for_status()
+            async for line in r.aiter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if data_str == "[DONE]":
+                    return
+                if not data_str:
+                    continue
+                try:
+                    evt = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                choices = evt.get("choices") or []
+                if not choices:
+                    continue
+                delta = (choices[0] or {}).get("delta") or {}
+                text = delta.get("content")
+                if text:
+                    yield text
 
 
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", re.DOTALL)

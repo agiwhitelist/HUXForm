@@ -68,7 +68,7 @@ export class Bridge {
     [
       "turn_created", "planning_started", "plan_ready", "awaiting_steer",
       "research_started", "research_step", "research_done", "research_failed",
-      "codegen_started", "ui_ready", "regenerating", "running",
+      "codegen_started", "codegen_chunk", "ui_ready", "regenerating", "running",
       "tool_called", "tool_result", "tool_error", "tool_denied", "tool_dry_run",
       "approval_required", "state_patch", "log", "narration",
       "file_attached",
@@ -216,6 +216,34 @@ export class Bridge {
         this.postToIframe({
           __agui: true, kind: "response", id, ok: true, result: rec,
         });
+      } catch (err: any) {
+        this.postToIframe({
+          __agui: true, kind: "response", id, ok: false,
+          error: String(err?.message ?? err),
+        });
+      }
+      return;
+    }
+
+    if (kind === "evolve") {
+      const { id, refine_note } = data as { id: string; refine_note: string };
+      try {
+        const res = await fetch(`/api/turns/${this.turnId}/regenerate`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ refine_note: String(refine_note || "") }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          this.postToIframe({
+            __agui: true, kind: "response", id, ok: false,
+            error: body?.detail || `HTTP ${res.status}`,
+          });
+        } else {
+          this.postToIframe({
+            __agui: true, kind: "response", id, ok: true, result: body,
+          });
+        }
       } catch (err: any) {
         this.postToIframe({
           __agui: true, kind: "response", id, ok: false,

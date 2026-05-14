@@ -552,11 +552,19 @@ async def _drive_turn(turn: Turn, state: Any) -> None:
         turn.emit({"type": "codegen_started"})
         if turn.cancelled:
             return
+
+        async def _on_codegen_chunk(partial: str) -> None:
+            # Stream the in-progress HTML to the host shell. The shell
+            # feeds it into the iframe via srcDoc while status=generating,
+            # so the user watches the document being drawn live.
+            turn.emit({"type": "codegen_chunk", "html": partial, "bytes": len(partial)})
+
         html, usage = await state.codegen.generate(
             goal=turn.user_message,
             plan=directed.plan,
             files=attached,
             research=turn.state.get("research"),
+            on_chunk=_on_codegen_chunk,
         )
         turn.html = html
         # naive cumulative usage
@@ -591,6 +599,10 @@ async def _regenerate_turn(turn: Turn, state: Any, refine_note: str | None) -> N
         turn.status = "generating"
         turn.emit({"type": "regenerating", "refine_note": refine_note})
         attached = [registry.get_file(fid).to_public() for fid in turn.file_ids if registry.get_file(fid)]
+
+        async def _on_codegen_chunk(partial: str) -> None:
+            turn.emit({"type": "codegen_chunk", "html": partial, "bytes": len(partial)})
+
         html, usage = await state.codegen.generate(
             goal=turn.user_message,
             plan=turn.plan,
@@ -598,6 +610,7 @@ async def _regenerate_turn(turn: Turn, state: Any, refine_note: str | None) -> N
             refine_note=refine_note,
             previous_html=previous_html,
             research=turn.state.get("research"),
+            on_chunk=_on_codegen_chunk,
         )
         turn.html = html
         for k, v in (usage or {}).items():
