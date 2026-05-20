@@ -1,0 +1,2010 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>HUXForm — self-playing demo · repo audit</title>
+<meta name="viewport" content="width=1280, initial-scale=1" />
+<meta name="theme-color" content="#06080a" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,500;1,300;1,500&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,500;1,9..144,300;1,9..144,500&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #06080a;
+    --bg-2: #030506;
+    --cream: #ece8dd;
+    --cream-dim: rgba(236, 232, 221, .55);
+    --warm: #e8633a;
+    --cool: #87b178;
+    --red:  #d34f3a;
+    --rule: rgba(236, 232, 221, .08);
+
+    /* terminal palette */
+    --term-bg:    #07090d;
+    --term-bg-2:  #0c0f14;
+    --amber:      #f0c060;
+    --amber-dim:  rgba(240, 192, 96, .55);
+    --amber-ghost: rgba(240, 192, 96, .12);
+    --cyan:       #5ec8c8;
+    --cyan-dim:   rgba(94, 200, 200, .55);
+    --green:      #5ec88a;
+    --red-hi:     #e84a3a;
+    --grid:       rgba(240, 192, 96, .08);
+    --console-line: rgba(240, 192, 96, .055);
+
+    /* playbook vellum */
+    --paper:      #e4e0d2;
+    --paper-2:    #cfc8b2;
+    --paper-ink:  #181612;
+    --paper-rule: rgba(24, 22, 18, .35);
+    --diff-add:   #2b5a3a;
+    --diff-del:   #5a2b2b;
+    --diff-bg:    #1a1d22;
+
+    /* report seal */
+    --seal-mat:   #efe7d1;
+    --seal-edge:  #b89554;
+    --seal-stamp: #8a2920;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--cream);
+    font-family: 'Fraunces', 'GT Sectra', Georgia, serif; font-weight: 300;
+    -webkit-font-smoothing: antialiased; overflow: hidden;
+  }
+  body {
+    background:
+      radial-gradient(60% 60% at 78% -10%, rgba(232,99,58,.18), transparent 70%),
+      radial-gradient(60% 60% at -10% 110%, rgba(135,177,120,.06), transparent 70%),
+      linear-gradient(180deg, var(--bg), var(--bg-2));
+  }
+  body::before {
+    content: ''; position: fixed; inset: 0; pointer-events: none;
+    background-image: radial-gradient(rgba(236,232,221,.03) 1px, transparent 1px);
+    background-size: 3px 3px;
+  }
+
+  /* ============================================================ */
+  /* shell                                                         */
+  /* ============================================================ */
+  .shell {
+    position: fixed; inset: 0;
+    display: grid; grid-template-rows: 56px auto 1fr 60px;
+  }
+  .scribe {
+    display: flex; align-items: center; gap: 18px;
+    padding: 0 28px; border-bottom: 1px solid var(--rule);
+    background: rgba(6, 8, 10, .65); backdrop-filter: blur(10px);
+    position: relative; z-index: 4;
+  }
+  .scribe-sigil {
+    width: 22px; height: 22px; flex: 0 0 22px;
+    transform: rotate(45deg); border: 1.5px solid var(--cream);
+    position: relative;
+  }
+  .scribe-sigil::after {
+    content: ''; position: absolute; inset: -8px;
+    border-left: 1.5px solid var(--cream); border-right: 1.5px solid var(--cream);
+    transform: rotate(-45deg);
+  }
+  .scribe-goal {
+    font-style: italic; font-size: 16px; color: var(--cream);
+    max-width: 42%; white-space: nowrap; overflow: hidden;
+    border-right: 1px solid var(--cream); padding-right: 4px;
+  }
+  .scribe-goal.done { border-right: 0; }
+  .scribe-sep { width: 1px; height: 16px; background: var(--rule); }
+  .scribe-step {
+    display: flex; align-items: center; gap: 10px;
+    color: var(--cream-dim); font-style: italic; font-size: 14px;
+    letter-spacing: .02em;
+  }
+  .scribe-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--warm); animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: .35; transform: scale(.85); }
+    50%      { opacity: 1;   transform: scale(1.15); }
+  }
+  .scribe-meta {
+    margin-left: auto; font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px; color: var(--cream-dim); letter-spacing: .04em;
+  }
+  .scribe-actions { display: flex; gap: 8px; align-items: center; }
+  .scribe-actions button {
+    appearance: none; background: transparent;
+    border: 1px solid var(--rule); color: var(--cream-dim);
+    padding: 4px 10px; font: inherit; font-size: 12px; font-style: italic;
+    border-radius: 2px; letter-spacing: .04em;
+  }
+
+  .stage {
+    position: relative; overflow: hidden;
+    margin: 18px 28px; border: 1px solid var(--rule);
+    border-radius: 6px; background: var(--bg-2);
+    box-shadow: 0 30px 80px -30px rgba(0, 0, 0, .9);
+  }
+
+  /* curtain */
+  .curtain {
+    position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; opacity: 0; transition: opacity .5s;
+    pointer-events: none; z-index: 2; background: var(--bg-2);
+  }
+  .curtain.show { opacity: 1; }
+  .curtain-inner { text-align: center; max-width: 600px; padding: 32px; }
+  .curtain-meta {
+    color: var(--warm); font-size: 11px; letter-spacing: .22em;
+    text-transform: uppercase; margin-bottom: 14px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .curtain-concept {
+    font-size: 38px; font-weight: 300; font-style: italic;
+    margin: 0 0 12px; color: var(--cream); letter-spacing: -.5px;
+  }
+  .curtain-metaphor {
+    color: var(--cream-dim); font-style: italic; font-size: 15px; margin: 0 0 24px;
+    line-height: 1.5;
+  }
+  .curtain-swatch { display: flex; justify-content: center; gap: 8px; }
+  .curtain-swatch span {
+    width: 32px; height: 32px; border-radius: 50%;
+    border: 1px solid var(--rule);
+    transform: scale(0); animation: swatch-in .6s ease-out forwards;
+  }
+  .curtain-swatch span:nth-child(1) { animation-delay: .1s; }
+  .curtain-swatch span:nth-child(2) { animation-delay: .25s; }
+  .curtain-swatch span:nth-child(3) { animation-delay: .4s; }
+  .curtain-swatch span:nth-child(4) { animation-delay: .55s; }
+  .curtain-swatch span:nth-child(5) { animation-delay: .7s; }
+  @keyframes swatch-in { to { transform: scale(1); } }
+
+  /* ============================================================ */
+  /* DASHBOARD scene (Act I — generated terminal-style audit UI)   */
+  /* ============================================================ */
+  .dashboard {
+    position: absolute; inset: 0;
+    background:
+      linear-gradient(180deg, var(--term-bg-2) 0%, var(--term-bg) 100%);
+    color: var(--amber); padding: 22px 28px 28px;
+    font-family: 'JetBrains Mono', monospace;
+    opacity: 0; transition: opacity .55s ease;
+    display: flex; flex-direction: column;
+  }
+  .dashboard.show { opacity: 1; }
+  .dashboard::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background:
+      /* faint CRT scan lines */
+      repeating-linear-gradient(0deg,
+        rgba(240,192,96,.022) 0 1px,
+        transparent 1px 3px);
+  }
+  .dashboard::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse 100% 80% at 50% 0%, rgba(240,192,96,.04), transparent 70%);
+    box-shadow: inset 0 0 100px rgba(0,0,0,.6);
+  }
+
+  /* repo header card */
+  .dash-h {
+    position: relative; z-index: 1;
+    display: grid; grid-template-columns: auto 1fr auto;
+    gap: 18px; align-items: center;
+    padding: 12px 16px; margin-bottom: 14px;
+    border: 1px solid var(--amber-ghost);
+    background: var(--amber-ghost);
+    border-radius: 2px;
+  }
+  .dash-h-glyph {
+    width: 28px; height: 28px;
+    border: 1.5px solid var(--amber); border-radius: 2px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--amber); font-size: 13px; font-weight: 700;
+  }
+  .dash-repo {
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .dash-repo-name {
+    font-size: 15px; color: var(--cream); font-weight: 500;
+    letter-spacing: .04em;
+  }
+  .dash-repo-name .org { color: var(--amber-dim); }
+  .dash-repo-meta {
+    font-size: 10px; color: var(--cream-dim); letter-spacing: .08em;
+  }
+  .dash-repo-meta .v {
+    color: var(--cyan); margin-right: 12px;
+  }
+  .dash-stat-strip {
+    display: flex; gap: 18px;
+  }
+  .dash-stat {
+    text-align: center;
+  }
+  .dash-stat .k {
+    font-size: 9px; color: var(--cream-dim); letter-spacing: .14em;
+    text-transform: uppercase;
+  }
+  .dash-stat .v {
+    font-size: 16px; color: var(--amber); font-weight: 500;
+    line-height: 1;
+  }
+
+  /* dashboard body grid */
+  .dash-body {
+    position: relative; z-index: 1;
+    display: grid; grid-template-columns: 1.1fr 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 14px; flex: 1; min-height: 0;
+  }
+
+  .panel {
+    border: 1px solid var(--amber-ghost);
+    background: var(--term-bg);
+    border-radius: 2px;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .panel-h {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 14px; border-bottom: 1px solid var(--amber-ghost);
+    background: linear-gradient(180deg, rgba(240,192,96,.05), transparent);
+    color: var(--cyan); font-size: 10px;
+    letter-spacing: .18em; text-transform: uppercase;
+  }
+  .panel-h::before {
+    content: '⌘'; color: var(--amber); font-weight: 700;
+    font-size: 11px;
+  }
+  .panel-h .right {
+    margin-left: auto; color: var(--cream-dim);
+    font-size: 10px; letter-spacing: .08em;
+  }
+  .panel-body { padding: 10px 14px; flex: 1; overflow: hidden; }
+
+  /* findings list */
+  .findings { grid-column: 1 / 2; grid-row: 1 / 3; }
+  .finding {
+    display: grid; grid-template-columns: 70px 1fr;
+    gap: 12px; padding: 10px 0;
+    border-bottom: 1px dashed var(--amber-ghost);
+    opacity: 0; transform: translateY(6px);
+    transition: opacity .35s, transform .35s, background .2s;
+  }
+  .finding:last-child { border-bottom: 0; }
+  .finding.show { opacity: 1; transform: translateY(0); }
+  .finding.pulse { background: rgba(240,192,96,.04); }
+  .finding-sev {
+    text-align: center;
+    padding: 4px 0;
+    font-size: 9px; letter-spacing: .14em; text-transform: uppercase;
+    border-radius: 1px; align-self: start;
+    font-weight: 700;
+  }
+  .finding-sev.high   { color: var(--red-hi); border: 1px solid var(--red-hi); background: rgba(232,74,58,.10); }
+  .finding-sev.medium { color: var(--amber); border: 1px solid var(--amber); background: rgba(240,192,96,.08); }
+  .finding-sev.low    { color: var(--cyan); border: 1px solid var(--cyan); background: rgba(94,200,200,.08); }
+  .finding-sev.info   { color: var(--cream-dim); border: 1px solid var(--rule); }
+  .finding-body { min-width: 0; }
+  .finding-title {
+    color: var(--cream); font-size: 12px;
+    margin-bottom: 4px; font-weight: 500;
+  }
+  .finding-line {
+    color: var(--amber-dim); font-size: 10px; line-height: 1.55;
+    display: flex; gap: 10px; flex-wrap: wrap;
+  }
+  .finding-line .pkg { color: var(--cyan); }
+  .finding-line .ghsa {
+    color: var(--amber); border-bottom: 1px dotted var(--amber-dim);
+  }
+  .finding-line .arrow { color: var(--cream-dim); }
+
+  /* deps tree panel (top-right) */
+  .deps { grid-column: 2 / 3; grid-row: 1 / 2; }
+  .deps-body { padding: 10px 14px; }
+  .dep {
+    display: grid; grid-template-columns: 8px 1fr auto auto;
+    gap: 8px; align-items: center;
+    font-size: 10px; line-height: 1.6;
+    opacity: 0; transform: translateX(-4px);
+    transition: opacity .25s, transform .25s;
+  }
+  .dep.show { opacity: 1; transform: translateX(0); }
+  .dep-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--green);
+  }
+  .dep.cve .dep-dot { background: var(--red-hi); box-shadow: 0 0 6px rgba(232,74,58,.65); }
+  .dep.warn .dep-dot { background: var(--amber); }
+  .dep-name {
+    color: var(--cream); font-weight: 500;
+  }
+  .dep-name .trans { color: var(--cream-dim); font-weight: 400; }
+  .dep-spec {
+    color: var(--amber-dim); font-size: 9px;
+  }
+  .dep-ver {
+    color: var(--cyan); font-size: 9px;
+  }
+
+  /* stale PRs panel (bottom-right) */
+  .prs { grid-column: 2 / 3; grid-row: 2 / 3; }
+  .pr {
+    display: grid; grid-template-columns: auto 1fr auto;
+    gap: 10px; align-items: baseline;
+    padding: 7px 0;
+    border-bottom: 1px dashed var(--amber-ghost);
+    opacity: 0; transform: translateX(-4px);
+    transition: opacity .25s, transform .25s;
+    font-size: 11px;
+  }
+  .pr.show { opacity: 1; transform: translateX(0); }
+  .pr:last-child { border-bottom: 0; }
+  .pr-num { color: var(--amber); font-weight: 500; min-width: 50px; }
+  .pr-title { color: var(--cream); font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pr-meta { color: var(--cream-dim); font-size: 9px; letter-spacing: .04em; }
+  .pr-meta .age {
+    color: var(--amber-dim); padding: 1px 4px; border: 1px solid var(--amber-ghost);
+    border-radius: 1px; margin-left: 6px;
+  }
+  .pr-meta .age.old { color: var(--red-hi); border-color: rgba(232,74,58,.4); }
+  .pr-meta .diff-add { color: var(--green); }
+  .pr-meta .diff-del { color: var(--red-hi); }
+
+  /* dashboard mode after evolve: dim non-HIGH */
+  .dashboard.high-only .finding:not(.sev-high) {
+    opacity: .15 !important; transition: opacity 1s;
+  }
+  .dashboard.high-only .dep:not(.cve) {
+    opacity: .25 !important; transition: opacity 1s;
+  }
+
+  /* boot console line stream — short pre-dashboard render */
+  .boot-stream {
+    position: absolute; left: 28px; top: 22px; right: 28px; bottom: 28px;
+    z-index: 2; pointer-events: none;
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    color: var(--amber); line-height: 1.6;
+    opacity: 0; transition: opacity .4s;
+  }
+  .boot-stream.show { opacity: 1; }
+  .boot-line {
+    display: grid; grid-template-columns: 50px 1fr;
+    gap: 12px;
+    opacity: 0; transform: translateX(-4px);
+    transition: opacity .2s, transform .2s;
+  }
+  .boot-line.show { opacity: 1; transform: translateX(0); }
+  .boot-line .t { color: var(--cream-dim); }
+  .boot-line .msg { color: var(--cyan); }
+  .boot-line .msg.ok { color: var(--green); }
+  .boot-line .msg.err { color: var(--red-hi); }
+
+  /* ============================================================ */
+  /* PLAYBOOK scene (step 2 · remediation)                         */
+  /* ============================================================ */
+  .playbook {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(120% 80% at 30% 0%, var(--paper), var(--paper-2));
+    color: var(--paper-ink); padding: 26px 48px 32px;
+    opacity: 0; transition: opacity .55s;
+    display: flex; flex-direction: column;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .playbook.show { opacity: 1; }
+  .playbook::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background:
+      repeating-linear-gradient(0deg, rgba(24,22,18,.04) 0 1px, transparent 1px 4px);
+  }
+  .playbook::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    box-shadow: inset 0 0 120px rgba(24,22,18,.30);
+  }
+  .playbook-h {
+    position: relative; z-index: 1;
+    display: flex; align-items: baseline; gap: 16px;
+    border-bottom: 1px solid var(--paper-rule); padding-bottom: 10px;
+    margin-bottom: 18px;
+  }
+  .playbook-eyebrow {
+    font-size: 10px; letter-spacing: .24em; text-transform: uppercase;
+    color: var(--seal-stamp);
+  }
+  .playbook-title {
+    font-family: 'Fraunces', serif; font-style: italic; font-weight: 500;
+    font-size: 26px; color: var(--paper-ink); margin: 0; letter-spacing: -.3px;
+    overflow: hidden; white-space: nowrap;
+    border-right: 1.5px solid var(--seal-stamp); padding-right: 2px;
+  }
+  .playbook-title.done { border-right: 0; }
+  .playbook-meta {
+    margin-left: auto; font-size: 10px; color: rgba(24,22,18,.55);
+    letter-spacing: .14em; text-transform: uppercase;
+  }
+  .playbook-body {
+    position: relative; z-index: 1; flex: 1; min-height: 0;
+    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    gap: 18px;
+  }
+  .remedy {
+    background: rgba(255,255,255,.5);
+    border: 1px solid var(--paper-rule);
+    border-radius: 2px;
+    padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 8px;
+    opacity: 0; transform: translateY(8px);
+    transition: opacity .5s, transform .5s;
+  }
+  .remedy.show { opacity: 1; transform: translateY(0); }
+  .remedy-h {
+    display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--paper-rule); padding-bottom: 6px;
+  }
+  .remedy-pkg {
+    font-weight: 700; color: var(--paper-ink);
+    font-size: 13px;
+  }
+  .remedy-cve {
+    font-size: 9px; color: var(--seal-stamp);
+    letter-spacing: .08em;
+    background: rgba(138,41,32,.10); padding: 2px 6px;
+    border-radius: 1px;
+  }
+  .remedy-rationale {
+    font-family: 'Cormorant Garamond', serif; font-style: italic;
+    font-size: 13px; line-height: 1.5; color: var(--paper-ink);
+  }
+  .remedy-diff {
+    background: var(--diff-bg);
+    color: #e6e6e6; font-size: 10px;
+    padding: 8px 10px; border-radius: 1px;
+    line-height: 1.5;
+    white-space: pre-wrap; overflow: hidden;
+  }
+  .remedy-diff .add { color: #87b178; }
+  .remedy-diff .del { color: #d34f3a; }
+  .remedy-diff .cmt { color: rgba(255,255,255,.45); font-style: italic; }
+  .remedy-impact {
+    font-family: 'Cormorant Garamond', serif; font-style: italic;
+    font-size: 11px; color: rgba(24,22,18,.65);
+    border-top: 1px dashed var(--paper-rule); padding-top: 6px;
+  }
+  .remedy-impact .label {
+    font-family: 'JetBrains Mono', monospace; font-style: normal;
+    font-size: 9px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--seal-stamp); margin-right: 4px;
+  }
+
+  /* ============================================================ */
+  /* REPORT scene (step 3 · audit seal)                            */
+  /* ============================================================ */
+  .report {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(120% 80% at 50% 0%, #1a1a22, #07080d);
+    display: flex; align-items: center; justify-content: center;
+    padding: 22px; opacity: 0; transition: opacity .6s;
+  }
+  .report.show { opacity: 1; }
+  .report::before {
+    content: ''; position: absolute; inset: 0;
+    background: radial-gradient(800px 500px at 50% 50%, rgba(184,149,84,.10), transparent 70%);
+    pointer-events: none;
+  }
+  .report-paper {
+    position: relative;
+    width: 540px; max-width: 90%;
+    aspect-ratio: 4 / 5;
+    background: var(--seal-mat);
+    padding: 26px 30px;
+    box-shadow:
+      0 30px 80px rgba(0,0,0,.7),
+      inset 0 0 0 1px rgba(184,149,84,.45),
+      inset 0 0 30px rgba(120,90,40,.15);
+    transform: scale(.94); opacity: 0;
+    transition: transform .8s cubic-bezier(.2,.9,.3,1.05), opacity .6s;
+    display: flex; flex-direction: column;
+  }
+  .report.show .report-paper { transform: scale(1); opacity: 1; }
+  .report-paper::before {
+    content: ''; position: absolute; inset: 14px;
+    border: 1px solid rgba(184,149,84,.5);
+    pointer-events: none;
+  }
+  .report-paper::after {
+    content: ''; position: absolute; inset: 0;
+    background:
+      repeating-linear-gradient(0deg, rgba(24,22,18,.025) 0 1px, transparent 1px 5px);
+    pointer-events: none;
+  }
+  .report-h {
+    text-align: center; margin-bottom: 16px; padding-bottom: 12px;
+    border-bottom: 1px solid var(--seal-edge);
+    position: relative; z-index: 1;
+  }
+  .report-eyebrow {
+    font-family: 'JetBrains Mono', monospace; font-size: 9px;
+    letter-spacing: .32em; text-transform: uppercase;
+    color: var(--seal-stamp); margin-bottom: 4px;
+  }
+  .report-title {
+    font-family: 'Fraunces', serif; font-style: italic; font-weight: 500;
+    font-size: 28px; color: var(--paper-ink); letter-spacing: -.4px;
+    margin: 0;
+  }
+  .report-subj {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    color: rgba(24,22,18,.65); letter-spacing: .04em;
+    margin-top: 6px;
+  }
+  .report-body {
+    flex: 1; position: relative; z-index: 1;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .report-tally {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+  }
+  .report-tally-cell {
+    text-align: center; padding: 10px 4px;
+    border: 1px solid var(--seal-edge); border-radius: 1px;
+    background: rgba(255,255,255,.35);
+  }
+  .report-tally-cell .v {
+    font-family: 'Fraunces', serif; font-style: italic;
+    font-size: 26px; color: var(--paper-ink); line-height: 1;
+  }
+  .report-tally-cell.high .v   { color: var(--red-hi); }
+  .report-tally-cell.med .v    { color: #b67c20; }
+  .report-tally-cell.low .v    { color: #4a7da5; }
+  .report-tally-cell.info .v   { color: rgba(24,22,18,.5); }
+  .report-tally-cell .k {
+    font-family: 'JetBrains Mono', monospace; font-size: 9px;
+    letter-spacing: .18em; text-transform: uppercase;
+    color: rgba(24,22,18,.6); margin-top: 4px;
+  }
+  .report-summary {
+    font-family: 'Cormorant Garamond', serif; font-style: italic;
+    font-size: 14px; color: var(--paper-ink); line-height: 1.55;
+    border-top: 1px solid var(--seal-edge);
+    border-bottom: 1px solid var(--seal-edge);
+    padding: 12px 4px;
+  }
+  .report-summary strong {
+    font-weight: 500; color: var(--seal-stamp);
+  }
+  .report-action {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    color: var(--paper-ink);
+    background: rgba(184,149,84,.14);
+    padding: 8px 12px; border-radius: 1px;
+    border-left: 3px solid var(--seal-stamp);
+  }
+  .report-action .label {
+    font-size: 9px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--seal-stamp); display: block; margin-bottom: 3px;
+  }
+  .report-footer {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-top: 10px; border-top: 1px solid var(--seal-edge);
+    font-family: 'JetBrains Mono', monospace; font-size: 9px;
+    color: rgba(24,22,18,.65); letter-spacing: .08em;
+    position: relative; z-index: 1;
+  }
+  .report-sig {
+    color: var(--paper-ink); font-style: italic;
+    font-family: 'Cormorant Garamond', serif; font-size: 16px;
+  }
+  /* embossed seal */
+  .report-seal {
+    position: absolute; right: 30px; bottom: 86px;
+    width: 92px; height: 92px; border-radius: 50%;
+    border: 2px solid var(--seal-stamp);
+    color: var(--seal-stamp);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    transform: rotate(-14deg);
+    background: rgba(138,41,32,.06);
+    opacity: 0; transition: opacity .55s .25s, transform .55s .25s;
+    z-index: 2;
+  }
+  .report.show .report-seal { opacity: 1; transform: rotate(-14deg) scale(1); }
+  .report-seal::before {
+    content: ''; position: absolute; inset: 4px;
+    border: 1px dashed var(--seal-stamp); border-radius: 50%;
+  }
+  .report-seal-top {
+    font-family: 'JetBrains Mono', monospace; font-size: 7px;
+    letter-spacing: .22em; text-transform: uppercase;
+  }
+  .report-seal-main {
+    font-family: 'Fraunces', serif; font-style: italic; font-weight: 500;
+    font-size: 14px; letter-spacing: .04em; line-height: 1;
+    margin: 4px 0 2px;
+  }
+  .report-seal-bot {
+    font-family: 'JetBrains Mono', monospace; font-size: 6px;
+    letter-spacing: .18em; text-transform: uppercase; opacity: .8;
+  }
+
+  .report-actions {
+    position: absolute; right: 36px; top: 36px;
+    display: flex; gap: 6px; z-index: 3;
+    opacity: 0; transition: opacity .5s;
+  }
+  .report.show .report-actions { opacity: 1; }
+  .report-actions button {
+    appearance: none; padding: 5px 11px;
+    background: rgba(184,149,84,.18); border: 1px solid var(--seal-edge);
+    color: var(--seal-stamp); font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+    border-radius: 2px; cursor: pointer;
+  }
+
+  /* ============================================================ */
+  /* followup                                                      */
+  /* ============================================================ */
+  .followup {
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 28px; border-top: 1px solid var(--rule);
+    background: rgba(6, 8, 10, .65); backdrop-filter: blur(10px);
+  }
+  .followup-mark { color: var(--cool); font-style: italic; font-size: 12px; letter-spacing: .08em; }
+  .followup-input {
+    flex: 1; background: transparent; border: 0; outline: none;
+    color: var(--cream); font: inherit; font-style: italic; font-size: 15px;
+    padding: 8px 0; caret-color: var(--cool);
+  }
+  .followup-cursor {
+    display: inline-block; width: 7px; height: 17px; background: var(--cool);
+    vertical-align: middle; margin-left: 2px;
+    animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .followup-send {
+    appearance: none; background: var(--warm); color: #fff;
+    border: 0; padding: 8px 16px; border-radius: 2px; font: inherit;
+    font-style: italic; font-size: 13px; letter-spacing: .04em; cursor: pointer;
+    opacity: .55;
+  }
+
+  /* ============================================================ */
+  /* endcard                                                       */
+  /* ============================================================ */
+  .endcard {
+    position: fixed; inset: 0; z-index: 9; pointer-events: none;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(circle at 50% 50%, rgba(6,8,10,0) 0%, rgba(6,8,10,.85) 55%, rgba(6,8,10,.97) 100%);
+    opacity: 0; transition: opacity .6s ease;
+  }
+  .endcard.show { opacity: 1; }
+  .endcard-inner {
+    text-align: center; padding: 44px 64px;
+    border: 1px solid var(--rule);
+    background: rgba(3,5,6,.94);
+    backdrop-filter: blur(20px);
+    position: relative; overflow: hidden;
+    transform: scale(.96); opacity: 0;
+    transition: transform .8s cubic-bezier(.2,.9,.3,1.05), opacity .6s;
+    max-width: 720px;
+  }
+  .endcard.show .endcard-inner { transform: scale(1); opacity: 1; }
+  .endcard-inner::before, .endcard-inner::after {
+    content: ''; position: absolute; width: 14px; height: 14px;
+    border: 1px solid var(--warm);
+  }
+  .endcard-inner::before { top: 10px; left: 10px; border-right: 0; border-bottom: 0; }
+  .endcard-inner::after  { bottom: 10px; right: 10px; border-left: 0; border-top: 0; }
+  .endcard-eyebrow {
+    color: var(--warm); font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; letter-spacing: .32em; text-transform: uppercase;
+    margin-bottom: 18px;
+  }
+  .endcard h2 {
+    margin: 0 0 4px; font-family: 'Fraunces', serif; font-style: italic;
+    font-weight: 300; font-size: 64px; color: var(--cream); letter-spacing: -1.5px;
+    line-height: 1;
+  }
+  .endcard .tag {
+    color: var(--cream-dim); font-style: italic; font-size: 18px;
+    margin-bottom: 22px;
+  }
+  .endcard .chips {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 8px; margin-bottom: 26px;
+    padding: 16px 0; border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+  }
+  .endcard .chip {
+    text-align: center; padding: 9px 6px;
+    background: rgba(135,177,120,.06); border: 1px solid var(--rule);
+    border-radius: 2px;
+  }
+  .endcard .chip .k {
+    display: block; font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; color: var(--cool); margin-bottom: 3px;
+  }
+  .endcard .chip .v {
+    display: block; font-size: 9px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--cream-dim);
+  }
+  .endcard .url {
+    font-family: 'JetBrains Mono', monospace; font-size: 14px;
+    color: var(--cool); letter-spacing: .04em;
+  }
+  .endcard .url::before { content: '↗  '; opacity: .55; }
+
+  /* ============================================================ */
+  /* ACT II — interactive proofs (reused)                          */
+  /* ============================================================ */
+  .cursor {
+    position: fixed; left: 0; top: 0; width: 22px; height: 22px;
+    pointer-events: none; z-index: 8; opacity: 0;
+    transition: opacity .25s, transform .9s cubic-bezier(.5,.05,.25,1);
+    will-change: transform;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,.6));
+  }
+  .cursor.show { opacity: 1; }
+  .cursor svg { width: 100%; height: 100%; display: block; }
+  .cursor-flash {
+    position: absolute; left: 11px; top: 11px;
+    width: 0; height: 0; border-radius: 50%;
+    border: 2px solid var(--warm); opacity: 0;
+    transform: translate(-50%, -50%);
+  }
+  .cursor.click .cursor-flash { animation: click-flash .55s ease-out; }
+  @keyframes click-flash {
+    0%   { width: 0;  height: 0;  opacity: .9; border-width: 2px; }
+    100% { width: 70px; height: 70px; opacity: 0; border-width: 1px; }
+  }
+
+  .toolog {
+    position: absolute; right: 16px; bottom: 16px;
+    width: 360px; max-width: 38%;
+    background: rgba(3,5,6,.92); backdrop-filter: blur(14px);
+    border: 1px solid var(--rule); border-radius: 4px;
+    color: var(--cream); font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; line-height: 1.55;
+    opacity: 0; transform: translateY(12px);
+    transition: opacity .4s, transform .5s;
+    z-index: 5; padding: 10px 12px 12px;
+  }
+  .toolog.show { opacity: 1; transform: translateY(0); }
+  .toolog-h {
+    display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--rule); padding-bottom: 6px; margin-bottom: 8px;
+    color: var(--cream-dim); letter-spacing: .14em; text-transform: uppercase; font-size: 9px;
+  }
+  .toolog-h::before {
+    content: ''; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--warm); animation: pulse 1.6s ease-in-out infinite;
+  }
+  .toolog-list { display: flex; flex-direction: column; gap: 3px; max-height: 200px; overflow: hidden; }
+  .toolog-line {
+    display: grid; grid-template-columns: 44px 130px 1fr;
+    gap: 8px; opacity: 0; transform: translateX(8px);
+    transition: opacity .25s, transform .25s;
+  }
+  .toolog-line.show { opacity: 1; transform: translateX(0); }
+  .toolog-t { color: var(--cream-dim); }
+  .toolog-tool { color: var(--warm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .toolog-tool.ok { color: var(--cool); }
+  .toolog-arg { color: var(--cream-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* fact card for finding */
+  .fact-card {
+    position: absolute; left: 50%; top: 50%;
+    width: 0; height: 0; opacity: 0;
+    background: rgba(7,9,13,.98);
+    border: 1.5px solid var(--red-hi);
+    border-radius: 4px;
+    transform: translate(-50%, -50%);
+    color: var(--cream); overflow: hidden; pointer-events: none;
+    transition: width .55s cubic-bezier(.2,.9,.3,1.1),
+                height .55s cubic-bezier(.2,.9,.3,1.1),
+                opacity .35s ease,
+                left .55s cubic-bezier(.2,.9,.3,1.1),
+                top  .55s cubic-bezier(.2,.9,.3,1.1);
+    z-index: 3;
+    box-shadow:
+      0 12px 40px rgba(0,0,0,.7),
+      0 0 30px rgba(232,74,58,.20);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .fact-card.show { width: 380px; height: 240px; opacity: 1; padding: 14px 16px; }
+  .fact-card-h {
+    display: flex; align-items: baseline; gap: 10px;
+    border-bottom: 1px solid rgba(232,74,58,.4); padding-bottom: 8px;
+    margin-bottom: 10px;
+  }
+  .fact-card-sev {
+    font-size: 9px; letter-spacing: .14em; text-transform: uppercase;
+    padding: 3px 7px; background: rgba(232,74,58,.18);
+    color: var(--red-hi); border-radius: 1px; font-weight: 700;
+  }
+  .fact-card-id {
+    font-size: 11px; color: var(--amber); letter-spacing: .04em;
+  }
+  .fact-card-cve {
+    margin-left: auto; font-size: 9px; color: var(--cream-dim);
+  }
+  .fact-card-title {
+    font-family: 'Cormorant Garamond', serif; font-style: italic;
+    font-size: 15px; color: var(--cream); margin-bottom: 8px;
+    line-height: 1.3;
+  }
+  .fact-card-row {
+    display: grid; grid-template-columns: 90px 1fr;
+    gap: 8px; font-size: 10px; padding: 2px 0;
+    opacity: 0; transform: translateY(4px);
+    transition: opacity .25s, transform .25s;
+  }
+  .fact-card-row.show { opacity: 1; transform: translateY(0); }
+  .fact-card-row .k {
+    color: rgba(236,232,221,.45); letter-spacing: .08em; text-transform: uppercase; font-size: 9px;
+    align-self: center;
+  }
+  .fact-card-row .v {
+    color: var(--cream); font-size: 11px;
+    word-break: break-word;
+  }
+  .fact-card-row .v.cyan { color: var(--cyan); }
+  .fact-card-row .v.red  { color: var(--red-hi); }
+  .fact-card-row .v.green { color: var(--green); }
+  .fact-card-url {
+    margin-top: 8px; padding-top: 8px;
+    border-top: 1px dashed var(--rule);
+    color: var(--cyan); font-size: 10px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .fact-card-url::before { content: '↗  '; opacity: .5; }
+
+  /* researcher */
+  .researcher {
+    position: absolute; left: 50%; bottom: 16px; transform: translate(-50%, 20px);
+    width: 700px; max-width: calc(100% - 32px);
+    background: rgba(3,5,6,.92); backdrop-filter: blur(14px);
+    border: 1px solid var(--rule); border-radius: 4px;
+    padding: 10px 14px 12px;
+    color: var(--cream); font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; line-height: 1.55;
+    opacity: 0;
+    transition: opacity .45s, transform .55s; z-index: 5;
+  }
+  .researcher.show { opacity: 1; transform: translate(-50%, 0); }
+  .researcher-h {
+    color: var(--cool); letter-spacing: .16em; text-transform: uppercase;
+    font-size: 9px; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .researcher-h::before {
+    content: ''; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--cool); animation: pulse 1.6s ease-in-out infinite;
+  }
+  .researcher-line {
+    display: grid; grid-template-columns: 56px 130px 1fr;
+    gap: 10px; opacity: 0; transform: translateX(-6px);
+    transition: opacity .25s, transform .25s; padding: 1px 0;
+  }
+  .researcher-line.show { opacity: 1; transform: translateX(0); }
+  .researcher-line .t { color: var(--cream-dim); }
+  .researcher-line .tool { color: var(--warm); }
+  .researcher-line .tool.ok { color: var(--cool); }
+  .researcher-line .tool.sum {
+    color: var(--cream); font-style: italic;
+    font-family: 'Cormorant Garamond', serif; font-size: 12px;
+  }
+  .researcher-line .arg {
+    color: var(--cream-dim); white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* discover */
+  .discover {
+    position: absolute; inset: 0; padding: 36px 48px;
+    background: linear-gradient(180deg, #0a0d12 0%, #06080a 100%);
+    color: var(--cream); display: flex; flex-direction: column;
+    opacity: 0; transition: opacity .5s; z-index: 1;
+  }
+  .discover.show { opacity: 1; }
+  .discover::before {
+    content: ''; position: absolute; inset: 0;
+    background: radial-gradient(800px 400px at 50% -10%, rgba(135,177,120,.10), transparent 70%);
+    pointer-events: none;
+  }
+  .discover-h {
+    display: flex; align-items: baseline; gap: 14px; margin-bottom: 20px;
+    border-bottom: 1px solid var(--rule); padding-bottom: 12px;
+  }
+  .discover-eyebrow {
+    color: var(--cool); font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; letter-spacing: .22em; text-transform: uppercase;
+  }
+  .discover-title {
+    font-family: 'Fraunces', serif; font-style: italic; font-weight: 300;
+    font-size: 26px; margin: 0; letter-spacing: -.3px;
+  }
+  .discover-meta {
+    margin-left: auto; color: var(--cream-dim);
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+  }
+  .discover-list { display: flex; flex-direction: column; gap: 10px; flex: 1; }
+  .discover-row {
+    display: grid; grid-template-columns: 70px 1fr auto;
+    gap: 20px; align-items: center;
+    padding: 14px 18px; border: 1px solid var(--rule); border-radius: 3px;
+    background: rgba(255,255,255,.015);
+    opacity: 0; transform: translateY(8px);
+    transition: opacity .35s, transform .4s, border-color .25s, background .25s;
+  }
+  .discover-row.show { opacity: 1; transform: translateY(0); }
+  .discover-row.top { border-color: rgba(135,177,120,.5); background: rgba(135,177,120,.06); }
+  .discover-trust {
+    font-family: 'JetBrains Mono', monospace; font-size: 26px;
+    color: var(--cool); text-align: center; line-height: 1;
+  }
+  .discover-trust.warn { color: var(--warm); }
+  .discover-trust.red { color: var(--red-hi); }
+  .discover-trust .sub {
+    display: block; font-size: 8px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--cream-dim); margin-top: 4px;
+  }
+  .discover-name {
+    font-family: 'Fraunces', serif; font-style: italic; font-size: 19px;
+    margin-bottom: 2px;
+  }
+  .discover-repo {
+    font-family: 'JetBrains Mono', monospace; font-size: 9px;
+    color: var(--cyan-dim); margin-bottom: 6px;
+    letter-spacing: .04em;
+  }
+  .discover-desc {
+    color: var(--cream-dim); font-style: italic; font-size: 12px;
+    margin-bottom: 6px;
+  }
+  .discover-flags { display: flex; gap: 6px; flex-wrap: wrap; }
+  .discover-flag {
+    font-family: 'JetBrains Mono', monospace; font-size: 9px;
+    padding: 2px 7px; border-radius: 2px; letter-spacing: .10em;
+    background: rgba(135,177,120,.14); color: var(--cool);
+    text-transform: uppercase;
+  }
+  .discover-flag.risk { background: rgba(232,99,58,.16); color: var(--warm); }
+  .discover-flag.red  { background: rgba(232,74,58,.20); color: #e07965; }
+  .discover-cta {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 14px; border: 1px solid var(--cool);
+    color: var(--cool); font-style: italic; font-size: 12px; letter-spacing: .04em;
+    border-radius: 2px;
+  }
+  .discover-row.top .discover-cta { background: rgba(135,177,120,.10); }
+
+  /* approval */
+  .approval {
+    position: absolute; inset: 0; z-index: 7;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(6,8,10,.55); backdrop-filter: blur(4px);
+    opacity: 0; transition: opacity .35s; pointer-events: none;
+  }
+  .approval.show { opacity: 1; }
+  .approval-card {
+    width: 500px; max-width: 80%;
+    background: rgba(3,5,6,.96); border: 1px solid var(--warm);
+    border-radius: 4px; padding: 20px 24px;
+    transform: scale(.94); opacity: 0;
+    transition: transform .35s cubic-bezier(.2,.9,.3,1.05), opacity .3s;
+    box-shadow: 0 20px 60px rgba(0,0,0,.7);
+  }
+  .approval.show .approval-card { transform: scale(1); opacity: 1; }
+  .approval-eyebrow {
+    color: var(--warm); font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; letter-spacing: .22em; text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .approval-title {
+    font-family: 'Fraunces', serif; font-style: italic; font-size: 22px;
+    margin: 0 0 6px;
+  }
+  .approval-tool {
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    color: var(--cream-dim); margin-bottom: 14px;
+  }
+  .approval-risk {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 2px;
+    background: rgba(232,99,58,.16); color: var(--warm);
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    letter-spacing: .12em; text-transform: uppercase; margin-bottom: 14px;
+  }
+  .approval-reason {
+    color: var(--cream-dim); font-style: italic; font-size: 13px;
+    margin-bottom: 20px; line-height: 1.55;
+  }
+  .approval-reason em { color: var(--cyan); font-style: normal; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .approval-actions {
+    display: flex; gap: 10px; justify-content: flex-end;
+  }
+  .approval-actions button {
+    appearance: none; padding: 8px 16px; border-radius: 2px;
+    font: inherit; font-style: italic; font-size: 13px; cursor: pointer;
+    transition: background .2s, transform .2s;
+  }
+  .approval-actions .cancel {
+    background: transparent; border: 1px solid var(--rule); color: var(--cream-dim);
+  }
+  .approval-actions .approve {
+    background: var(--warm); border: 1px solid var(--warm); color: #fff;
+    letter-spacing: .04em;
+  }
+  .approval-actions .approve.pressed { transform: scale(.96); background: #b04421; }
+
+  /* mission ribbon */
+  /* mission rib wrapper — a real grid row in shell, expands when shown */
+  .mission-wrap {
+    overflow: hidden;
+    max-height: 0;
+    transition: max-height .55s cubic-bezier(.2,.9,.3,1.05);
+    background: rgba(7,9,13,.92);
+  }
+  .mission-wrap.show { max-height: 36px; }
+
+  .mission-rib {
+    display: flex; align-items: center; gap: 14px;
+    height: 34px; padding: 0 28px;
+    background:
+      linear-gradient(180deg, rgba(232,99,58,.18), rgba(232,99,58,.04));
+    border-bottom: 1px solid rgba(232,99,58,.32);
+    color: var(--warm); font-size: 11px; letter-spacing: .18em;
+    text-transform: uppercase;
+    position: relative; z-index: 5;
+  }
+  .mission-rib .step {
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .mission-rib .title {
+    font-family: 'Fraunces', serif; font-style: italic;
+    text-transform: none; letter-spacing: .04em; color: var(--cream);
+  }
+  .mission-rib .bar {
+    flex: 1; max-width: 280px; height: 2px; background: var(--rule);
+    margin-left: auto; border-radius: 2px; overflow: hidden;
+  }
+  .mission-rib .bar span {
+    display: block; height: 100%; background: var(--warm);
+    width: 33%; transition: width 1.2s cubic-bezier(.2,.9,.3,1);
+  }
+
+  .timer {
+    position: fixed; bottom: 6px; left: 8px; z-index: 99;
+    font-family: monospace; font-size: 10px; color: var(--cream-dim);
+    display: none;
+  }
+  body.debug .timer { display: block; }
+</style>
+</head>
+<body>
+  <div class="shell">
+    <header class="scribe">
+      <span class="scribe-sigil"></span>
+      <span class="scribe-goal" id="scribe-goal"></span>
+      <span class="scribe-sep"></span>
+      <span class="scribe-step">
+        <span class="scribe-dot" id="scribe-dot"></span>
+        <span id="scribe-step">reading the task</span>
+      </span>
+      <span class="scribe-meta" id="scribe-meta">0 ↘  0 ↗</span>
+      <div class="scribe-actions">
+        <button>Regenerate</button>
+        <button>Export ▾</button>
+        <button>Inspector</button>
+      </div>
+    </header>
+
+    <div class="mission-wrap" id="mission-wrap">
+      <div class="mission-rib" id="mission">
+        <span class="step" id="mission-step">step 1 / 3</span>
+        <span>·</span>
+        <span class="title" id="mission-title">audit the dependency tree</span>
+        <span class="bar"><span id="mission-bar"></span></span>
+      </div>
+    </div>
+
+    <main class="stage" id="stage">
+
+      <div class="curtain" id="curtain">
+        <div class="curtain-inner">
+          <div class="curtain-meta" id="curtain-meta">phase 01 · planning</div>
+          <h3 class="curtain-concept" id="curtain-concept">terminal audit dashboard</h3>
+          <p class="curtain-metaphor" id="curtain-metaphor">amber-on-black CRT readout · repo header card · severity-ranked findings · PR aging table · live dep tree</p>
+          <div class="curtain-swatch">
+            <span style="background:#07090d"></span>
+            <span style="background:#f0c060"></span>
+            <span style="background:#5ec8c8"></span>
+            <span style="background:#5ec88a"></span>
+            <span style="background:#e84a3a"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- step 1: terminal audit dashboard -->
+      <div class="dashboard" id="dashboard">
+        <div class="dash-h" id="dash-h">
+          <span class="dash-h-glyph">▣</span>
+          <div class="dash-repo">
+            <div class="dash-repo-name">
+              <span class="org">anthropics/</span><span id="dash-repo">anthropic-sdk-python</span>
+            </div>
+            <div class="dash-repo-meta">
+              <span class="v">v0.102.0</span>
+              <span>released 2026-05-13 · main · MIT · Python 3.9+</span>
+            </div>
+          </div>
+          <div class="dash-stat-strip">
+            <div class="dash-stat"><div class="v" id="stat-stars">3.5k</div><div class="k">stars</div></div>
+            <div class="dash-stat"><div class="v" id="stat-forks">682</div><div class="k">forks</div></div>
+            <div class="dash-stat"><div class="v" id="stat-prs">144</div><div class="k">open PRs</div></div>
+            <div class="dash-stat"><div class="v" id="stat-issues">103</div><div class="k">issues</div></div>
+          </div>
+        </div>
+
+        <div class="dash-body">
+          <!-- left: findings -->
+          <div class="panel findings">
+            <div class="panel-h">
+              security findings · OSV.dev + GHSA
+              <span class="right" id="findings-count">scanning…</span>
+            </div>
+            <div class="panel-body" id="findings-list"></div>
+          </div>
+          <!-- right top: deps -->
+          <div class="panel deps">
+            <div class="panel-h">
+              dependency tree · pyproject.toml
+              <span class="right" id="deps-count">10 deps</span>
+            </div>
+            <div class="panel-body" id="deps-list"></div>
+          </div>
+          <!-- right bottom: stale PRs -->
+          <div class="panel prs">
+            <div class="panel-h">
+              open PRs · sorted by age
+              <span class="right">144 open · 3 stale</span>
+            </div>
+            <div class="panel-body" id="prs-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- step 2: remediation playbook -->
+      <div class="playbook" id="playbook">
+        <div class="playbook-h">
+          <span class="playbook-eyebrow">step 02 · remediation</span>
+          <h2 class="playbook-title" id="playbook-title"></h2>
+          <span class="playbook-meta">huxform-audit · v0.102 · 3 patches drafted</span>
+        </div>
+        <div class="playbook-body" id="playbook-body"></div>
+      </div>
+
+      <!-- step 3: audit report seal -->
+      <div class="report" id="report">
+        <div class="report-actions">
+          <button>Print</button>
+          <button>Sign</button>
+          <button>Share</button>
+        </div>
+        <div class="report-paper">
+          <div class="report-h">
+            <div class="report-eyebrow">audit attestation · OSV+GHSA</div>
+            <h2 class="report-title">Dependency Audit Report</h2>
+            <div class="report-subj">anthropics/anthropic-sdk-python @ v0.102.0</div>
+          </div>
+          <div class="report-body">
+            <div class="report-tally">
+              <div class="report-tally-cell high"><div class="v">1</div><div class="k">High</div></div>
+              <div class="report-tally-cell med"><div class="v">2</div><div class="k">Medium</div></div>
+              <div class="report-tally-cell low"><div class="v">0</div><div class="k">Low</div></div>
+              <div class="report-tally-cell info"><div class="v">4</div><div class="k">Info</div></div>
+            </div>
+            <div class="report-summary">
+              Three real-world vulnerabilities surfaced from the OSV.dev database against the
+              resolved dependency graph: <strong>GHSA-mr82-8j83-vxmv</strong> in pydantic
+              (constraint allows ReDoS-vulnerable range), <strong>GHSA-jjg7-2v4v-x38h</strong>
+              in transitive idna (DoS), and <strong>GHSA-2xpw-w6gg-jr37</strong> in transitive
+              urllib3 (streaming decompression bomb).
+            </div>
+            <div class="report-action">
+              <span class="label">Recommended action</span>
+              tighten pydantic ≥ 2.4.0 · pin transitive idna ≥ 3.7 · pin transitive urllib3 ≥ 2.5.0
+            </div>
+          </div>
+          <div class="report-seal">
+            <div class="report-seal-top">huxform</div>
+            <div class="report-seal-main">audit<br/>sealed</div>
+            <div class="report-seal-bot">v0.102 · MMXXVI</div>
+          </div>
+          <div class="report-footer">
+            <span>commit 9aa85c8 · 2026-05-13 20:11 CEST</span>
+            <span class="report-sig">— huxform-audit</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- MCP discover -->
+      <div class="discover" id="discover">
+        <div class="discover-h">
+          <span class="discover-eyebrow">tools.discover · query="OSV vulnerability database MCP"</span>
+          <h2 class="discover-title">3 candidates ranked by trust score</h2>
+          <span class="discover-meta">npm + github · 18 results · 3 top</span>
+        </div>
+        <div class="discover-list" id="discover-list"></div>
+      </div>
+
+      <!-- approval modal -->
+      <div class="approval" id="approval">
+        <div class="approval-card">
+          <div class="approval-eyebrow">approval required</div>
+          <h3 class="approval-title">install StacklokLabs/osv-mcp ?</h3>
+          <div class="approval-tool">tools.install · github.com/StacklokLabs/osv-mcp · sse</div>
+          <span class="approval-risk">⚠ risk · network</span>
+          <p class="approval-reason">
+            Spawns an SSE MCP server. Registers 3 real tools:
+            <em>mcp.osv.query_package</em>, <em>mcp.osv.query_batch</em>,
+            <em>mcp.osv.get_vulnerability</em>.
+            README audit · no shell access · no path traversal · queries osv.dev REST API only.
+          </p>
+          <div class="approval-actions">
+            <button class="cancel">Cancel</button>
+            <button class="approve" id="approve-btn">Approve</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- researcher -->
+      <div class="researcher" id="researcher">
+        <div class="researcher-h">researcher · ReAct loop · pre-codegen</div>
+        <div id="researcher-list"></div>
+      </div>
+
+      <!-- toolog -->
+      <div class="toolog" id="toolog">
+        <div class="toolog-h">live · bridge events</div>
+        <div class="toolog-list" id="toolog-list"></div>
+      </div>
+
+      <!-- fact card -->
+      <div class="fact-card" id="fact-card">
+        <div class="fact-card-h">
+          <span class="fact-card-sev" id="fact-sev">HIGH</span>
+          <span class="fact-card-id" id="fact-id">GHSA-mr82-8j83-vxmv</span>
+          <span class="fact-card-cve" id="fact-cve">CVE-2024-3772</span>
+        </div>
+        <div class="fact-card-title" id="fact-title"></div>
+        <div id="fact-rows"></div>
+        <div class="fact-card-url" id="fact-url"></div>
+      </div>
+    </main>
+
+    <div class="followup">
+      <span class="followup-mark">↳ refine</span>
+      <span class="followup-input" id="followup-input"></span>
+      <span class="followup-cursor" id="followup-cursor"></span>
+      <button class="followup-send">send</button>
+    </div>
+  </div>
+
+  <div class="cursor" id="cursor">
+    <svg viewBox="0 0 22 22" fill="none">
+      <path d="M3 2 L3 18 L8 14 L11 20 L14 19 L11 13 L18 13 Z"
+            fill="#ece8dd" stroke="#06080a" stroke-width="1.2" stroke-linejoin="round"/>
+    </svg>
+    <span class="cursor-flash"></span>
+  </div>
+
+  <div class="endcard" id="endcard">
+    <div class="endcard-inner">
+      <div class="endcard-eyebrow">open-source generative UI runtime</div>
+      <h2>HUXForm</h2>
+      <div class="tag">every prompt becomes a one-off mini-app that calls real tools on real data</div>
+      <div class="chips">
+        <div class="chip"><span class="k">streaming</span><span class="v">watch UI draw</span></div>
+        <div class="chip"><span class="k">evolve()</span><span class="v">self-redesign</span></div>
+        <div class="chip"><span class="k">researcher</span><span class="v">ReAct + tools</span></div>
+        <div class="chip"><span class="k">MCP discover</span><span class="v">trust-scored</span></div>
+        <div class="chip"><span class="k">mission</span><span class="v">multi-turn</span></div>
+        <div class="chip"><span class="k">OpenAPI</span><span class="v">any spec</span></div>
+        <div class="chip"><span class="k">sandboxed</span><span class="v">iframe + audit</span></div>
+        <div class="chip"><span class="k">BYO model</span><span class="v">any provider</span></div>
+      </div>
+      <div class="url">github.com/agiwhitelist/HUXForm</div>
+    </div>
+  </div>
+
+  <div class="timer" id="timer">0.0s</div>
+
+<script>
+/* ====================================================================== */
+/* HUXForm self-playing demo · Real audit of anthropics/anthropic-sdk-python
+/* Sources cited live: github.com · OSV.dev · GHSA database                */
+/* ====================================================================== */
+
+// REAL repo data (verified public 2026-05-20 via gh repo view)
+const REPO = {
+  org:  'anthropics',
+  name: 'anthropic-sdk-python',
+  stars: '3.5k',
+  forks: '682',
+  open_prs: 144,
+  open_issues: 103,
+  release: 'v0.102.0',
+  released: '2026-05-13',
+};
+
+// REAL dependencies from pyproject.toml
+const DEPS = [
+  { name: 'httpx',              spec: '>=0.25.0,<1',  resolved: '0.28.1',  status: 'ok'    },
+  { name: 'pydantic',           spec: '>=1.9.0,<3',   resolved: '2.13.4',  status: 'cve'   },
+  { name: 'anyio',              spec: '>=3.5.0,<5',   resolved: '4.13.0',  status: 'ok'    },
+  { name: 'distro',             spec: '>=1.7.0,<2',   resolved: '1.9.0',   status: 'ok'    },
+  { name: 'sniffio',            spec: '*',            resolved: '1.3.1',   status: 'ok'    },
+  { name: 'jiter',              spec: '>=0.4.0,<1',   resolved: '0.14.0',  status: 'ok'    },
+  { name: 'typing-extensions',  spec: '>=4.14,<5',    resolved: '4.15.0',  status: 'ok'    },
+  { name: 'docstring-parser',   spec: '>=0.15,<1',    resolved: '0.16',    status: 'ok'    },
+  { name: 'idna',               spec: 'transitive',   resolved: '3.10',    status: 'cve',  trans: true },
+  { name: 'urllib3',            spec: 'transitive',   resolved: '2.0.7',   status: 'cve',  trans: true },
+];
+
+// REAL GHSA-IDs from osv.dev (verified)
+const FINDINGS = [
+  {
+    id: 'f1', severity: 'HIGH',
+    ghsa:  'GHSA-mr82-8j83-vxmv',
+    cve:   'CVE-2024-3772',
+    pkg:   'pydantic',
+    affected:  '<2.4.0',
+    fixed:     '2.4.0',
+    title:     'ReDoS in pydantic email validator regex',
+    detail:    'Crafted email string triggers exponential backtracking in the email regex (networks.py), causing CPU exhaustion. Constraint pydantic>=1.9.0,<3 allows the vulnerable range; runtime currently resolves to 2.13.4 (safe), but lockfile drift or downstream installs may pull <2.4.0.',
+    url:       'github.com/advisories/GHSA-mr82-8j83-vxmv',
+    fix:       'pydantic>=2.4.0,<3',
+    cvss:      '7.5',
+  },
+  {
+    id: 'f2', severity: 'MEDIUM',
+    ghsa:  'GHSA-jjg7-2v4v-x38h',
+    cve:   'CVE-2024-3651',
+    pkg:   'idna (transitive · via httpx)',
+    affected:  '<3.7',
+    fixed:     '3.7',
+    title:     'idna.encode() DoS from crafted Unicode input',
+    detail:    'Specially crafted argument to idna.encode() consumes significant CPU. Refined in 3.7 to reject such strings. Currently resolves to 3.10 but transitive — lockfile-pin recommended.',
+    url:       'github.com/advisories/GHSA-jjg7-2v4v-x38h',
+    fix:       'idna>=3.7',
+    cvss:      '6.2',
+  },
+  {
+    id: 'f3', severity: 'MEDIUM',
+    ghsa:  'GHSA-2xpw-w6gg-jr37',
+    cve:   'CVE-2025-66471',
+    pkg:   'urllib3 (transitive)',
+    affected:  '<2.5.0',
+    fixed:     '2.5.0',
+    title:     'urllib3 streaming API decompression bomb',
+    detail:    'Streaming API allocates unbounded memory when decompressing highly compressed payloads. Patched in 2.5.0 by adding size guards. Currently resolves 2.0.7 — vulnerable.',
+    url:       'github.com/advisories/GHSA-2xpw-w6gg-jr37',
+    fix:       'urllib3>=2.5.0',
+    cvss:      '5.9',
+  },
+  {
+    id: 'i1', severity: 'INFO',
+    ghsa:  '—',
+    cve:   '—',
+    pkg:   'distro 1.9.0',
+    affected:  '—',
+    fixed:     '—',
+    title:     'distro lower bound very old (>=1.7.0, released 2021)',
+    detail:    'No CVE filed, but lower bound from 2021 is loose. Consider tightening to >=1.9.0.',
+    url:       'github.com/python-distro/distro/releases',
+    fix:       'distro>=1.9.0,<2',
+    cvss:      '—',
+  },
+];
+
+// REAL MCP candidates (verified GitHub URLs)
+const MCPS = [
+  {
+    name:  'StacklokLabs/osv-mcp',
+    trust: 87, klass: 'cool', top: true,
+    repo:  'github.com/StacklokLabs/osv-mcp',
+    desc:  'SSE MCP — query osv.dev for package vulnerabilities · batch + single + by-ID lookup',
+    flags: [['read+net', ''], ['no shell', ''], ['org-backed', '']],
+    cta:   '↓ install'
+  },
+  {
+    name:  'gleicon/mcp-osv',
+    trust: 73, klass: 'cool',
+    repo:  'github.com/gleicon/mcp-osv',
+    desc:  'Go MCP — OSV.dev + Gitleaks v8 secret scanner · 3 tools · independent',
+    flags: [['read+net', ''], ['scans filesystem', 'risk']],
+    cta:   '↓ install'
+  },
+  {
+    name:  'qianniuspace/mcp-security-audit',
+    trust: 61, klass: 'warn',
+    repo:  'github.com/qianniuspace/mcp-security-audit',
+    desc:  'npm-only audit · uses npm registry · smaller package corpus than OSV',
+    flags: [['npm-only', 'risk'], ['less maintained', 'risk']],
+    cta:   '↓ review'
+  },
+];
+
+// Real PRs (live state verified 2026-05-20 — 144 open, oldest 23d)
+const PRS = [
+  { num: 1449, title: 'fix: retain tool search and web fetch beta blocks in parsed streams', age: 23, ageLbl: '23d', author: 'nightcityblade', adds: 41,   dels: 0,  stale: true },
+  { num: 1466, title: 'fix: allow beta citation file_id in round-tripped params',            age: 21, ageLbl: '21d', author: 'nightcityblade', adds: 29,   dels: 0,  stale: true },
+  { num: 1478, title: 'feat(helpers): add ConversationManager for multi-turn conversations', age: 19, ageLbl: '19d', author: 'ajit216',        adds: 1680, dels: 0,  stale: true },
+  { num: 1513, title: 'perf: reduce root import overhead',                                   age: 11, ageLbl: '11d', author: 'wilyan09007',    adds: 346,  dels: 54 },
+  { num: 1538, title: 'fix(tools): append_messages() in tool runner no longer infinite-loops', age:  6, ageLbl:  '6d', author: 'Zelys-DFKH',     adds: 378,  dels: 32 },
+];
+
+// Step 2 remediation
+const REMEDIATIONS = [
+  {
+    pkg:       'pydantic',
+    cve:       'GHSA-mr82-8j83-vxmv',
+    severity:  'high',
+    file:      'pyproject.toml',
+    diff: [
+      ['del', '"pydantic>=1.9.0,<3",'],
+      ['add', '"pydantic>=2.4.0,<3",'],
+      ['cmt', '# pydantic<2.4.0 has ReDoS in email validator (GHSA-mr82-8j83-vxmv)'],
+      ['cmt', '# drops v1 support — verify type-adapter usage in src/'],
+    ],
+    rationale: 'Tighten lower bound past the email-regex ReDoS fix while keeping the major-version range.',
+    impact:    'drops Pydantic v1 — verify TypeAdapter / .from_dict callers',
+  },
+  {
+    pkg:       'idna',
+    cve:       'GHSA-jjg7-2v4v-x38h',
+    severity:  'medium',
+    file:      'pyproject.toml',
+    diff: [
+      ['cmt', '# pin transitive — sdk distribution can\'t rely on consumer lockfiles'],
+      ['add', '"idna>=3.7",  # pulled via httpx, < 3.7 has DoS in encode()'],
+    ],
+    rationale: 'Explicitly pin the transitive to avoid downstream consumers resolving < 3.7.',
+    impact:    'none · idna 3.7 is fully API-compatible',
+  },
+  {
+    pkg:       'urllib3',
+    cve:       'GHSA-2xpw-w6gg-jr37',
+    severity:  'medium',
+    file:      'pyproject.toml',
+    diff: [
+      ['cmt', '# pin transitive — streaming decompression bomb in <2.5.0'],
+      ['add', '"urllib3>=2.5.0",  # via requests<-httpx chain'],
+    ],
+    rationale: 'Patch the decompression-bomb regression by pinning transitive ≥ 2.5.0.',
+    impact:    'none · urllib3 2.5.0 preserves the 2.x API surface',
+  },
+];
+
+// ---------- helpers ----------
+const $ = (id) => document.getElementById(id);
+const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+async function typewrite(el, text, msPerChar = 35) {
+  el.textContent = '';
+  for (const ch of text) {
+    el.textContent += ch;
+    await wait(msPerChar + Math.random() * 18);
+  }
+}
+
+function setStep(text) { $('scribe-step').textContent = text; }
+function setMeta(text) { $('scribe-meta').textContent = text; }
+function show(id) { $(id).classList.add('show'); }
+function hide(id) { $(id).classList.remove('show'); }
+
+async function tickTokens(toIn, toOut, ms = 6000) {
+  const t0 = performance.now();
+  const startIn  = parseFloat($('scribe-meta').dataset.in  || '0');
+  const startOut = parseFloat($('scribe-meta').dataset.out || '0');
+  while (true) {
+    const t = (performance.now() - t0) / ms;
+    if (t >= 1) break;
+    const inT  = Math.round(startIn  + (toIn  - startIn)  * Math.min(1, t));
+    const outT = Math.round(startOut + (toOut - startOut) * Math.min(1, t));
+    setMeta(`${human(inT)} ↘  ${human(outT)} ↗`);
+    await wait(80);
+  }
+  setMeta(`${human(toIn)} ↘  ${human(toOut)} ↗`);
+  $('scribe-meta').dataset.in  = String(toIn);
+  $('scribe-meta').dataset.out = String(toOut);
+}
+function human(n) {
+  if (n < 1000) return String(n);
+  if (n < 1e6) return (n / 1000).toFixed(1) + 'k';
+  return (n / 1e6).toFixed(2) + 'M';
+}
+
+// cursor
+function moveCursorTo(target, opts = {}) {
+  const offsetX = opts.dx ?? 0;
+  const offsetY = opts.dy ?? 0;
+  const rect = (typeof target === 'string' ? document.querySelector(target) : target).getBoundingClientRect();
+  const x = rect.left + rect.width  / 2 + offsetX;
+  const y = rect.top  + rect.height / 2 + offsetY;
+  const c = $('cursor');
+  c.style.transform = `translate(${x - 11}px, ${y - 4}px)`;
+  c.classList.add('show');
+}
+async function clickCursor(durationMs = 550) {
+  const c = $('cursor');
+  c.classList.add('click');
+  await wait(durationMs);
+  c.classList.remove('click');
+}
+function hideCursor() { $('cursor').classList.remove('show'); }
+
+// toolog
+function clearToolog() { $('toolog-list').innerHTML = ''; }
+async function addToolog({ t, tool, arg, ok }) {
+  const list = $('toolog-list');
+  const line = document.createElement('div');
+  line.className = 'toolog-line';
+  line.innerHTML = `
+    <span class="toolog-t">${t}</span>
+    <span class="toolog-tool ${ok ? 'ok' : ''}">${tool}</span>
+    <span class="toolog-arg">${arg ?? ''}</span>
+  `;
+  list.appendChild(line);
+  while (list.children.length > 9) list.removeChild(list.firstChild);
+  await wait(20);
+  line.classList.add('show');
+}
+
+// researcher
+function clearResearcher() { $('researcher-list').innerHTML = ''; }
+async function addResearcher({ t, tool, arg, ok, sum }) {
+  const list = $('researcher-list');
+  const line = document.createElement('div');
+  line.className = 'researcher-line';
+  line.innerHTML = `
+    <span class="t">${t}</span>
+    <span class="tool ${ok ? 'ok' : ''} ${sum ? 'sum' : ''}">${tool}</span>
+    <span class="arg">${arg ?? ''}</span>
+  `;
+  list.appendChild(line);
+  await wait(20);
+  line.classList.add('show');
+}
+
+// discover
+function clearDiscover() { $('discover-list').innerHTML = ''; }
+async function addDiscoverRow(m) {
+  const list = $('discover-list');
+  const row = document.createElement('div');
+  row.className = 'discover-row' + (m.top ? ' top' : '');
+  row.dataset.name = m.name;
+  row.innerHTML = `
+    <div class="discover-trust ${m.klass}">${m.trust}<span class="sub">trust</span></div>
+    <div>
+      <div class="discover-name">${m.name}</div>
+      <div class="discover-repo">${m.repo}</div>
+      <div class="discover-desc">${m.desc}</div>
+      <div class="discover-flags">
+        ${m.flags.map(([txt, cls]) => `<span class="discover-flag ${cls || ''}">${txt}</span>`).join('')}
+      </div>
+    </div>
+    <div class="discover-cta">${m.cta}</div>
+  `;
+  list.appendChild(row);
+  await wait(40);
+  row.classList.add('show');
+}
+
+// dashboard build
+function buildFindings() {
+  const root = $('findings-list');
+  root.innerHTML = '';
+  for (const f of FINDINGS) {
+    const el = document.createElement('div');
+    const sevClass = f.severity.toLowerCase();
+    el.className = `finding sev-${sevClass}`;
+    el.dataset.id = f.id;
+    el.innerHTML = `
+      <div class="finding-sev ${sevClass}">${f.severity}</div>
+      <div class="finding-body">
+        <div class="finding-title">${f.title}</div>
+        <div class="finding-line">
+          <span class="pkg">${f.pkg}</span>
+          <span class="arrow">→</span>
+          <span>affected ${f.affected} · fix ${f.fixed}</span>
+        </div>
+        <div class="finding-line">
+          <span class="ghsa">${f.ghsa}</span>
+          <span class="arrow">·</span>
+          <span>${f.cve}</span>
+        </div>
+      </div>
+    `;
+    root.appendChild(el);
+  }
+}
+
+function buildDeps() {
+  const root = $('deps-list');
+  root.innerHTML = '';
+  for (const d of DEPS) {
+    const el = document.createElement('div');
+    el.className = `dep ${d.status === 'cve' ? 'cve' : ''}`;
+    el.innerHTML = `
+      <span class="dep-dot"></span>
+      <span class="dep-name">${d.name}${d.trans ? ' <span class="trans">(t)</span>' : ''}</span>
+      <span class="dep-spec">${d.spec}</span>
+      <span class="dep-ver">→ ${d.resolved}</span>
+    `;
+    root.appendChild(el);
+  }
+}
+
+function buildPRs() {
+  const root = $('prs-list');
+  root.innerHTML = '';
+  for (const p of PRS) {
+    const el = document.createElement('div');
+    el.className = 'pr';
+    el.innerHTML = `
+      <span class="pr-num">#${p.num}</span>
+      <span class="pr-title">${p.title}</span>
+      <span class="pr-meta">
+        <span class="diff-add">+${p.adds}</span>
+        <span class="diff-del">−${p.dels}</span>
+        <span class="age ${p.stale ? 'old' : ''}">${p.ageLbl}</span>
+      </span>
+    `;
+    root.appendChild(el);
+  }
+}
+
+function buildPlaybook() {
+  const body = $('playbook-body');
+  body.innerHTML = '';
+  for (const r of REMEDIATIONS) {
+    const card = document.createElement('div');
+    card.className = 'remedy';
+    const diffHTML = r.diff.map(([k, t]) => {
+      const cls = k === 'add' ? 'add' : k === 'del' ? 'del' : 'cmt';
+      const prefix = k === 'add' ? '+ ' : k === 'del' ? '- ' : '';
+      return `<span class="${cls}">${prefix}${t}</span>`;
+    }).join('\n');
+    card.innerHTML = `
+      <div class="remedy-h">
+        <span class="remedy-pkg">${r.pkg}</span>
+        <span class="remedy-cve">${r.cve}</span>
+      </div>
+      <div class="remedy-rationale">${r.rationale}</div>
+      <pre class="remedy-diff">${diffHTML}</pre>
+      <div class="remedy-impact"><span class="label">impact</span>${r.impact}</div>
+    `;
+    body.appendChild(card);
+  }
+}
+
+// fact card opens with full CVE detail
+async function openFactCard(findingEl, f) {
+  const fc = $('fact-card');
+  const rect = findingEl.getBoundingClientRect();
+  const stage = $('stage').getBoundingClientRect();
+  const startX = rect.left + rect.width / 2 - stage.left;
+  const startY = rect.top  + rect.height / 2 - stage.top;
+  fc.style.left = `${startX}px`;
+  fc.style.top  = `${startY}px`;
+  fc.style.transform = `translate(-50%, -50%)`;
+  $('fact-sev').textContent   = f.severity;
+  $('fact-id').textContent    = f.ghsa;
+  $('fact-cve').textContent   = f.cve;
+  $('fact-title').textContent = f.title;
+  $('fact-url').textContent   = f.url;
+  const rows = $('fact-rows');
+  rows.innerHTML = '';
+  const data = [
+    ['package',   f.pkg],
+    ['affected',  `<span class="v red">${f.affected}</span>`],
+    ['fixed in',  `<span class="v green">${f.fixed}</span>`],
+    ['cvss',      `<span class="v cyan">${f.cvss}</span>`],
+    ['detail',    f.detail],
+  ];
+  for (const [k, v] of data) {
+    const row = document.createElement('div');
+    row.className = 'fact-card-row';
+    row.innerHTML = `<span class="k">${k}</span><span class="v">${v}</span>`;
+    rows.appendChild(row);
+  }
+  fc.classList.add('show');
+  await wait(40);
+  // pan toward visible region
+  fc.style.left = `${Math.min(stage.width - 200, Math.max(200, startX + 220))}px`;
+  fc.style.top  = `${Math.max(140, startY + 60)}px`;
+  await wait(420);
+  for (const r of rows.children) {
+    r.classList.add('show');
+    await wait(160);
+  }
+}
+function closeFactCard() {
+  $('fact-card').classList.remove('show');
+  Array.from($('fact-rows').children).forEach(r => r.classList.remove('show'));
+}
+
+function setMission(step, of, title) {
+  $('mission-step').textContent  = `step ${step} / ${of}`;
+  $('mission-title').textContent = title;
+  $('mission-bar').style.width   = `${(step / of) * 100}%`;
+}
+
+// debug timer
+const timer = $('timer');
+const tStart = performance.now();
+if (location.search.includes('debug')) document.body.classList.add('debug');
+setInterval(() => {
+  timer.textContent = ((performance.now() - tStart) / 1000).toFixed(1) + 's';
+}, 50);
+
+async function reset() {
+  $('scribe-goal').textContent = '';
+  $('scribe-goal').classList.remove('done');
+  setStep('reading the task');
+  setMeta('0 ↘  0 ↗');
+  $('scribe-meta').dataset.in  = '0';
+  $('scribe-meta').dataset.out = '0';
+  hide('curtain'); hide('dashboard'); hide('playbook'); hide('report');
+  hide('discover'); hide('approval'); hide('researcher');
+  hide('toolog'); hide('fact-card'); hide('mission-wrap');
+  $('dashboard').classList.remove('high-only');
+  $('playbook-title').textContent = '';
+  $('playbook-title').classList.remove('done');
+  $('followup-input').textContent = '';
+  clearToolog();
+  clearResearcher();
+  clearDiscover();
+  setMission(1, 3, 'audit the dependency tree');
+  $('approve-btn').classList.remove('pressed');
+  hideCursor();
+  hide('endcard');
+  buildFindings();
+  buildDeps();
+  buildPRs();
+  buildPlaybook();
+}
+
+async function play() {
+  await reset();
+
+  // BEAT 1 [0 → 4] · prompt typewrites — REAL repo
+  await wait(1200);
+  await typewrite($('scribe-goal'),
+    'audit github.com/anthropics/anthropic-sdk-python for security + stale PRs', 40);
+  $('scribe-goal').classList.add('done');
+
+  // BEAT 2 [4 → 6] · mission rib
+  setStep('deciding what shape to take');
+  await wait(500);
+  setMission(1, 3, 'audit the dependency tree');
+  show('mission-wrap');
+  await wait(800);
+
+  // BEAT 3 [6 → 10] · curtain
+  show('curtain');
+  $('curtain-meta').textContent = 'phase 01 · planning';
+  await wait(3000);
+
+  // BEAT 4 [10 → 19] · researcher with REAL urls
+  $('curtain-meta').textContent = 'phase 02 · researcher';
+  setStep('researcher · gathering real repo + advisory data');
+  show('researcher');
+  tickTokens(950, 200, 10500);
+  await addResearcher({ t: '0.0s', tool: 'mcp.github.get_repo',     arg: 'anthropics/anthropic-sdk-python' });
+  await wait(700);
+  await addResearcher({ t: '0.7s', tool: 'ok',                      arg: '3.5k★ · 682f · v0.102.0 · MIT', ok: true });
+  await wait(500);
+  await addResearcher({ t: '1.2s', tool: 'mcp.github.list_pulls',   arg: 'state=open sort=updated' });
+  await wait(650);
+  await addResearcher({ t: '1.9s', tool: 'ok',                      arg: '144 open · 3 stale > 14d',      ok: true });
+  await wait(500);
+  await addResearcher({ t: '2.4s', tool: 'web.fetch',               arg: 'raw.githubusercontent.com/.../pyproject.toml' });
+  await wait(700);
+  await addResearcher({ t: '3.1s', tool: 'ok',                      arg: '8 direct + transitive resolved', ok: true });
+  await wait(550);
+  await addResearcher({ t: '3.7s', tool: 'web.fetch',               arg: 'api.osv.dev/v1/querybatch' });
+  await wait(700);
+  await addResearcher({ t: '4.4s', tool: 'ok',                      arg: '3 GHSA matches · 1 HIGH · 2 MED', ok: true });
+  await wait(450);
+  await addResearcher({ t: '4.9s', tool: 'summary',                 arg: 'pydantic ReDoS · idna DoS · urllib3 stream-bomb',  sum: true });
+  setStep('research_done');
+
+  // BEAT 5 [19 → 22] · hide researcher → drawing
+  await wait(1400);
+  hide('researcher');
+  await wait(400);
+  $('curtain-meta').textContent = 'phase 03 · drawing';
+  setStep('drawing the interface');
+  await wait(800);
+
+  // BEAT 6 [22 → 28] · dashboard reveal
+  hide('curtain');
+  show('dashboard');
+  $('findings-count').textContent = 'scanning…';
+  await wait(900);
+
+  // deps stream in
+  const deps = Array.from(document.querySelectorAll('.dep'));
+  for (const d of deps) {
+    d.classList.add('show');
+    await wait(70);
+  }
+  // PRs stream
+  const prs = Array.from(document.querySelectorAll('.pr'));
+  for (const p of prs) {
+    p.classList.add('show');
+    await wait(85);
+  }
+  await wait(300);
+  // findings appear one by one (most dramatic)
+  $('findings-count').textContent = '4 findings · 1 HIGH';
+  const findings = Array.from(document.querySelectorAll('.finding'));
+  for (const f of findings) {
+    f.classList.add('show');
+    await wait(280);
+  }
+
+  // BEAT 7 [28 → 30] · alive
+  setStep('alive · audit complete');
+  setMeta('2.4k ↘  12.8k ↗  · 24,180 bytes');
+  await wait(1400);
+
+  // ============================================================
+  // ACT II — interactivity
+  // ============================================================
+
+  // BEAT 8 [30 → 36] · cursor → first HIGH finding → fact card
+  show('toolog');
+  await wait(400);
+  const hiFinding = document.querySelector('.finding.sev-high');
+  hiFinding.classList.add('pulse');
+  moveCursorTo(hiFinding, { dx: 24, dy: 0 });
+  await wait(1100);
+  await clickCursor();
+  await addToolog({ t: '0.0s', tool: 'mcp.osv.get_vulnerability', arg: 'GHSA-mr82-8j83-vxmv' });
+  await openFactCard(hiFinding, FINDINGS[0]);
+  await addToolog({ t: '0.5s', tool: 'ok',                       arg: '→ osv.dev/vulnerability/GHSA-mr...', ok: true });
+  await wait(2400);
+  hiFinding.classList.remove('pulse');
+
+  // BEAT 9 [36 → 40] · close, refine → discover OSV MCP
+  closeFactCard();
+  moveCursorTo('.followup-input', { dx: -140 });
+  await wait(800);
+  setStep('listening');
+  $('followup-cursor').style.background = '#87b178';
+  await typewrite($('followup-input'),
+    'discover mcp for OSV vulnerability database', 40);
+  await wait(700);
+
+  // BEAT 10 [40 → 45] · discover panel with REAL MCPs
+  hide('dashboard');
+  hide('toolog');
+  hideCursor();
+  setStep('tools.discover · ranking candidates');
+  show('discover');
+  await wait(600);
+  for (const m of MCPS) {
+    await addDiscoverRow(m);
+    await wait(500);
+  }
+  await wait(700);
+
+  // BEAT 11 [45 → 49] · cursor → install top → approval
+  const topCta = document.querySelector('.discover-row.top .discover-cta');
+  moveCursorTo(topCta, { dx: 4 });
+  await wait(900);
+  await clickCursor();
+  await wait(300);
+  show('approval');
+  await wait(2400);
+
+  // BEAT 12 [49 → 51] · approve
+  const approveBtn = $('approve-btn');
+  moveCursorTo(approveBtn);
+  await wait(700);
+  await clickCursor();
+  approveBtn.classList.add('pressed');
+  await wait(250);
+  hide('approval');
+  show('toolog');
+  await addToolog({ t: '8.4s', tool: 'tools.install',          arg: 'StacklokLabs/osv-mcp' });
+  await addToolog({ t: '8.8s', tool: 'ok',                     arg: '→ mcp.osv.* registered (3)', ok: true });
+
+  // BEAT 13 [51 → 55] · live OSV query against full dep tree
+  hide('discover');
+  show('dashboard');
+  await wait(500);
+  await addToolog({ t: '9.0s', tool: 'mcp.osv.query_batch',    arg: '10 packages · resolved versions' });
+  await wait(450);
+  await addToolog({ t: '9.4s', tool: 'ok',                     arg: '→ 3 confirmed via osv.dev', ok: true });
+  setStep('alive · live OSV via mcp');
+  setMeta('3.2k ↘  15.4k ↗');
+  await wait(1700);
+
+  // BEAT 14 [55 → 59] · refine: filter HIGH-only
+  moveCursorTo('.followup-input', { dx: -140 });
+  await wait(800);
+  $('followup-input').textContent = '';
+  setStep('listening');
+  await typewrite($('followup-input'),
+    'show only HIGH severity', 42);
+  await wait(700);
+  setStep('regenerating · agui.evolve()');
+  show('curtain');
+  $('curtain-meta').textContent = 'agui.evolve()';
+  $('curtain-concept').textContent = 'same dashboard · HIGH only';
+  $('curtain-metaphor').textContent = 'dim non-critical findings · keep severity ordering · preserve dep tree';
+  hideCursor();
+  await wait(1500);
+
+  // BEAT 15 [59 → 62] · evolve to HIGH-only
+  hide('curtain');
+  $('dashboard').classList.add('high-only');
+  setStep('alive · evolved');
+  setMeta('3.8k ↘  18.6k ↗');
+  await wait(2400);
+
+  // ============================================================
+  // ACT III — step 2: remediation playbook
+  // ============================================================
+
+  setMission(2, 3, 'draft the remediation patches');
+  await wait(1500);
+
+  hide('toolog');
+  hide('dashboard');
+  setStep('drawing the interface');
+  show('playbook');
+  await wait(500);
+  await typewrite($('playbook-title'), 'Remediation Playbook · 3 patches drafted', 70);
+  $('playbook-title').classList.add('done');
+  await wait(400);
+  const remedies = Array.from(document.querySelectorAll('.remedy'));
+  for (const r of remedies) {
+    r.classList.add('show');
+    await wait(600);
+  }
+  await wait(2400);
+
+  // ============================================================
+  // ACT IV — step 3: audit report seal
+  // ============================================================
+
+  setMission(3, 3, 'seal the audit report');
+  await wait(1500);
+
+  hide('playbook');
+  show('report');
+  setStep('alive · mission complete');
+  await wait(6500);
+
+  // BEAT FINAL · endcard
+  show('endcard');
+  await wait(7500);
+
+  play();
+}
+
+play();
+</script>
+</body>
+</html>

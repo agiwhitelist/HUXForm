@@ -12,6 +12,23 @@
 
 </div>
 
+<div align="center">
+
+### See it run
+
+![HUXForm — 80-second audit demo](./demo/huxform-demo.gif)
+
+**[▶ Full-resolution video](./demo/huxform-demo.mp4)** · [12 hero stills](./demo)
+
+</div>
+
+> **About the demo.** The 80-second clip above is a deterministic HTML/CSS
+> render of one audit run, kept reproducible for the README. A live HUXForm
+> run varies in its visual metaphor — the Director may draw the same security
+> audit as a ledger, an inspection station, or a console, and that variety is
+> the point. The tool calls, the OSV/GHSA vulnerability data, and the MCP
+> discovery flow shown are all real.
+
 > **HUXForm is a runtime for generative software.**
 > You describe a task in one sentence. HUXForm **directs** a one-off visual
 > concept for it, **researches** the task with real tools (web search, fetch,
@@ -402,7 +419,8 @@ HUXForm is provider-agnostic. Pick the protocol your provider speaks:
 | `TAVILY_API_KEY`      | —                                    | Optional. `web.search` already works without a key (DuckDuckGo). |
 | `BRAVE_API_KEY`       | —                                    | Optional. Brave Search API — 2k req/mo free.                     |
 | `SERPER_API_KEY`      | —                                    | Optional. Google results via serper.dev free tier.               |
-| `GITHUB_TOKEN`        | —                                    | Optional. Raises GitHub API limit used by `tools.discover`.      |
+| `GITHUB_TOKEN`        | —                                    | Optional. Authenticates `web.fetch` against `api.github.com` and raises the limit used by `tools.discover` (60 → 5000 req/h). |
+| `AGUI_WEB_PROXY`      | —                                    | Optional. Routes web search / fetch through an HTTP proxy (the LLM client stays direct). |
 | `AGUI_MCP_CONFIG`     | `.agui/mcp.json`                     | MCP server config (seeded from `.agui/mcp.json.example`).        |
 | `AGUI_DATA_DIR`       | `.huxform-data`                      | SQLite + uploads + capability registry live here.                |
 | `AGUI_ENABLE_CLI`     | `1` (set by bootstrap)               | Registers `cli.*` host-CLI tools. Every call needs approval.     |
@@ -426,7 +444,8 @@ HUXForm is provider-agnostic. Pick the protocol your provider speaks:
 | `llm.ask`           | read         | Send a free-form prompt to HUXForm's LLM. Short reasoning / copywriting.        |
 | `llm.structured`    | read         | Ask the LLM for a JSON value matching a schema hint.                            |
 | `web.search`        | network      | Real web search. DuckDuckGo by default; Tavily/Brave/Serper if their key is set.|
-| `web.fetch`         | network      | GET a URL and return readable text + title + meta description (JSON auto-parsed).|
+| `web.fetch`         | network      | GET a URL and return readable text + title + meta description (JSON auto-parsed). Authenticates `api.github.com` when `GITHUB_TOKEN` is set. |
+| `osv.scan`          | network      | Scan a dependency list against the OSV.dev database (GHSA / CVE / PyPA). Returns confirmed vulnerabilities with severity and fixed versions. |
 | `data.parse_csv`    | read         | Parse CSV text into typed columns + rows (auto-sniffs delimiter).               |
 | `data.find_duplicates` | read      | Group rows by chosen keys, return duplicate groups.                             |
 | `data.summarize`    | read         | Per-column stats: non-empty, distinct, top values, min/max/mean.                |
