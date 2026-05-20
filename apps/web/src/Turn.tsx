@@ -51,6 +51,7 @@ export function Stage(props: {
   const onTurnUpdatedRef = useRef(props.onTurnUpdated);
   onTurnUpdatedRef.current = props.onTurnUpdated;
   const uiVersionRef = useRef(0);
+  const uiFinalizedRef = useRef(false);
 
   // refresh local snapshot if parent gives a new turn (e.g. follow-up landed)
   useEffect(() => {
@@ -58,6 +59,7 @@ export function Stage(props: {
     setEvents([]);
     setLatestNarration("");
     setIframeLoaded(false);
+    uiFinalizedRef.current = false;
   }, [props.turn.id]);
 
   // bridge + SSE; restarts when turn id changes
@@ -100,6 +102,20 @@ export function Stage(props: {
           }
         } else if (ev.type === "ui_ready") {
           setTurn((p) => ({ ...p, has_ui: true, status: "running" }));
+          // The live view is the boot opener + the model's streamed chunks
+          // concatenated — fine to watch, but it leaves the loading shell
+          // stitched above the model's own <head>. Once codegen is done the
+          // server holds a clean cached document; swap to it exactly once so
+          // the final frame is pristine (no leaked CSS, no stuck indicator).
+          if (!uiFinalizedRef.current) {
+            uiFinalizedRef.current = true;
+            const f = iframeRef.current;
+            if (f) {
+              uiVersionRef.current += 1;
+              f.removeAttribute("srcdoc");
+              f.src = `/api/turns/${turn.id}/ui-stream?v=${uiVersionRef.current}&t=${Date.now()}`;
+            }
+          }
         } else if (ev.type === "regenerating") {
           // Only react to live regenerating events. A replayed
           // `regenerating` from history would otherwise blank the
@@ -110,6 +126,7 @@ export function Stage(props: {
           if (!live) return;
           setTurn((p) => ({ ...p, status: "generating" }));
           setIframeLoaded(false);
+          uiFinalizedRef.current = false;
           // agui.evolve / manual regenerate — reload the iframe through
           // the streaming endpoint so the new document is drawn live too.
           const f = iframeRef.current;
