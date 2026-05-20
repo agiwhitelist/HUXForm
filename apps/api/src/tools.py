@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from .llm import LLMClient, extract_json
+from .osv import osv_scan
 from .web_search import web_fetch, web_search
 
 
@@ -128,6 +129,10 @@ async def _web_search(*, query: str, limit: int = 6) -> dict[str, Any]:
 
 async def _web_fetch(*, url: str, max_bytes: int = 800_000, extract_links: bool = False) -> dict[str, Any]:
     return await web_fetch(url, max_bytes=int(max_bytes), extract_links=bool(extract_links))
+
+
+async def _osv_scan(*, packages: list, ecosystem: str = "PyPI") -> dict[str, Any]:
+    return await osv_scan(packages, ecosystem=str(ecosystem))
 
 
 _NUM_RE = re.compile(r"^-?\d+(?:[.,]\d+)?$")
@@ -424,6 +429,31 @@ def register_builtin_tools(
         params_schema={"url": "string", "max_bytes?": "integer", "extract_links?": "boolean"},
         handler=_web_fetch,
         examples=["https://example.com"],
+    ))
+
+    _REGISTRY.register(Tool(
+        name="osv.scan",
+        title="Scan dependencies for vulnerabilities",
+        description=(
+            "Check a list of software dependencies against the OSV.dev "
+            "vulnerability database (mirrors GHSA / CVE / PyPA advisories). "
+            "Pass packages as [{\"name\": str, \"version\"?: str, "
+            "\"ecosystem\"?: str}]. Ecosystem defaults to PyPI; use \"npm\", "
+            "\"Go\", \"crates.io\", etc. for other stacks. Returns confirmed "
+            "vulnerabilities with CVE/GHSA ids, severity, and the version that "
+            "fixes each one. Use this for any security audit of a codebase — "
+            "fetch the dependency manifest first, then scan it."
+        ),
+        risk="network",
+        requires_approval=False,
+        params_schema={
+            "packages": "array<object>",
+            "ecosystem?": "string",
+        },
+        handler=_osv_scan,
+        examples=[
+            '[{"name": "pydantic", "version": "2.0.0"}]',
+        ],
     ))
 
     _REGISTRY.register(Tool(

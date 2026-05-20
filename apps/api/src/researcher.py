@@ -81,6 +81,12 @@ Decision policy at each step:
   * Prefer batching less:
       - First call should usually be a search / list / fetch.
       - Follow-up calls should drill into the most promising URL or row.
+  * For a security audit of a codebase, the real signal is in its
+    dependencies. Fetch the dependency manifest (pyproject.toml,
+    requirements.txt, package.json, go.mod, Cargo.toml, ...), read the
+    package names and versions, then call osv.scan with that list. A repo
+    with no security-labelled issues can still ship known-vulnerable
+    dependencies — osv.scan is what surfaces the real CVEs.
   * If you have enough data for the UI Generator to render a real answer,
     stop with action="done" and a one-paragraph summary of what you learned.
   * If the task is purely about explaining a concept the LLM already knows
