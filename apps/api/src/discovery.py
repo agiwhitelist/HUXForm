@@ -173,6 +173,35 @@ def _trust_score(*, author: str, stars: int, downloads: int, has_official_marker
     return round(min(1.0, score), 3)
 
 
+def _looks_like_mcp(name: str, keywords: list[str], description: str) -> bool:
+    """True only for genuine MCP servers. npm's fuzzy search will happily
+    return e.g. `prisma` for the query "OSV vulnerability database" — this
+    filter drops anything with no MCP marker in its name / keywords / blurb."""
+    if "@modelcontextprotocol/" in (name or "").lower():
+        return True
+    blob = " ".join([name or "", " ".join(keywords or []), description or ""]).lower()
+    return (
+        "mcp" in blob
+        or "model context protocol" in blob
+        or "model-context-protocol" in blob
+    )
+
+
+def _relevance(query: str, name: str, description: str) -> float:
+    """How well a candidate matches the query — fraction of query terms found
+    in its name / description, with name hits weighted double. Without this
+    the list is sorted purely by popularity and a popular-but-irrelevant
+    package outranks the exact tool the user asked for."""
+    terms = [t for t in re.split(r"[^a-z0-9]+", (query or "").lower()) if len(t) > 2]
+    if not terms:
+        return 0.5
+    name_l = (name or "").lower()
+    blob = f"{name_l} {(description or '').lower()}"
+    hits = sum(1 for t in terms if t in blob)
+    name_hits = sum(1 for t in terms if t in name_l)
+    return round(min(1.0, (hits + name_hits) / (len(terms) * 2)), 3)
+
+
 async def _gh_search(client: httpx.AsyncClient, query: str, limit: int) -> list[dict[str, Any]]:
     """GitHub repository search for `topic:mcp-server` + the query."""
     headers = {"Accept": "application/vnd.github+json"}
@@ -233,6 +262,12 @@ async def _npm_search(client: httpx.AsyncClient, query: str, limit: int) -> list
         pkg = obj.get("package") or {}
         name = pkg.get("name") or ""
         if not name:
+            continue
+        keywords = pkg.get("keywords") or []
+        description = pkg.get("description") or ""
+        # npm's search is fuzzy — drop anything that is not actually an MCP
+        # server so a popular unrelated package never reaches the candidate list.
+        if not _looks_like_mcp(name, keywords, description):
             continue
         author = (pkg.get("publisher") or {}).get("username") or (pkg.get("scope") or "")
         downloads = int((obj.get("downloads") or {}).get("weekly") or 0) if isinstance(obj.get("downloads"), dict) else 0
@@ -309,9 +344,18 @@ async def discover_tools(
         candidates.extend(gh)
     if isinstance(npm, list):
         candidates.extend(npm)
-    # Sort by trust score desc, then stars/downloads
+    # Score each candidate for how well it matches the query, then sort by
+    # relevance first — a popular but unrelated package must never outrank
+    # the tool the user actually asked for. Trust / popularity break ties.
+    for c in candidates:
+        c["relevance"] = _relevance(
+            query,
+            c.get("title") or c.get("id") or "",
+            c.get("description") or "",
+        )
     candidates.sort(
         key=lambda c: (
+            -(c.get("relevance") or 0.0),
             -(c.get("trust_score") or 0.0),
             -(c.get("stars") or 0),
             -(c.get("downloads_weekly") or 0),
