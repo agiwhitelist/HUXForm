@@ -25,6 +25,8 @@ import asyncio
 import json
 import logging
 import os
+import shutil
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,6 +37,24 @@ from .tools import Tool, ToolRegistry
 
 
 log = logging.getLogger("agui.mcp")
+
+
+def _resolve_command(command: str, args: list[str]) -> tuple[str, list[str]]:
+    """Resolve a launcher for asyncio.create_subprocess_exec.
+
+    On Windows, npx / uvx and similar launchers are .cmd shims. CreateProcess
+    cannot exec a .cmd directly (it raises WinError 2 "file not found"), so
+    resolve the command against PATH and route batch files through COMSPEC.
+    On POSIX the command is returned unchanged.
+    """
+    args = list(args)
+    if sys.platform != "win32":
+        return command, args
+    resolved = shutil.which(command) or command
+    if resolved.lower().endswith((".cmd", ".bat")):
+        comspec = os.environ.get("COMSPEC", "cmd.exe")
+        return comspec, ["/c", resolved, *args]
+    return resolved, args
 
 
 @dataclass
@@ -73,8 +93,9 @@ class MCPServer:
 
     async def start(self) -> dict[str, Any]:
         env = {**os.environ, **(self.cfg.env or {})}
+        command, args = _resolve_command(self.cfg.command, self.cfg.args)
         self.proc = await asyncio.create_subprocess_exec(
-            self.cfg.command, *self.cfg.args,
+            command, *args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

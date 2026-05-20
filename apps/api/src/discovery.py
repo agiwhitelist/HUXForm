@@ -470,6 +470,17 @@ async def install_mcp_server(
     cfg = MCPServerConfig(alias=alias, command=command, args=list(args or []), env=dict(env or {}))
     started = await manager.start_servers([cfg])
 
+    # start_servers swallows per-server exceptions and just logs them. If the
+    # server is not in the manager afterwards, the spawn or the initialize
+    # handshake failed — surface that instead of persisting a dead install.
+    server = manager.servers.get(alias)
+    if server is None:
+        raise RuntimeError(
+            f"MCP server {alias!r} failed to start "
+            f"(command: {command} {' '.join(args or [])}). "
+            f"Check the API log for the underlying error."
+        )
+
     entry = InstalledMCP(
         alias=alias, command=command, args=list(args or []), env=dict(env or {}),
         trust_score=trust_score, install_type=install_type,
@@ -477,12 +488,10 @@ async def install_mcp_server(
     )
     registry.add_mcp(entry)
 
-    server = manager.servers.get(alias)
     tools_advertised: list[str] = []
-    if server:
-        for name, t in manager.registry.tools.items():
-            if name.startswith(f"mcp.{alias}."):
-                tools_advertised.append(name)
+    for name, t in manager.registry.tools.items():
+        if name.startswith(f"mcp.{alias}."):
+            tools_advertised.append(name)
 
     return {
         "ok": True,
