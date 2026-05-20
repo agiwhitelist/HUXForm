@@ -298,7 +298,7 @@ async def discover_tools(
     coarse trust score (capped at 1.0).
     """
     headers = {"User-Agent": "HUXForm/0.3 (+https://github.com/agiwhitelist/HUXForm)"}
-    async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
+    async with httpx.AsyncClient(headers=headers, follow_redirects=True, trust_env=False) as client:
         gh, npm = await asyncio.gather(
             _gh_search(client, query, limit_per_source),
             _npm_search(client, query, limit_per_source),
@@ -321,7 +321,7 @@ async def discover_tools(
 
     audited = 0
     if audit_top > 0 and llm is not None:
-        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=20.0) as client:
+        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=20.0, trust_env=False) as client:
             for i, c in enumerate(candidates[: audit_top]):
                 try:
                     readme = await _fetch_readme(client, c)

@@ -43,7 +43,9 @@ class LLMClient:
     def __init__(self, cfg: LLMConfig | None = None) -> None:
         self.cfg = cfg or load_llm_config()
         timeout = httpx.Timeout(connect=15.0, read=180.0, write=30.0, pool=15.0)
-        self._client = httpx.AsyncClient(timeout=timeout)
+        # trust_env=False: ignore system proxy (e.g. Windows registry SOCKS) so the
+        # provider URL is reached directly. Set HTTPS_PROXY in .env to opt back in.
+        self._client = httpx.AsyncClient(timeout=timeout, trust_env=False)
 
     async def aclose(self) -> None:
         await self._client.aclose()

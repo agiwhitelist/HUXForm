@@ -42,7 +42,7 @@ class OpenAPIRegistration:
 class OpenAPIAdapter:
     def __init__(self, registry: ToolRegistry) -> None:
         self.registry = registry
-        self._client = httpx.AsyncClient(timeout=60.0)
+        self._client = httpx.AsyncClient(timeout=60.0, trust_env=False)
         self._regs: list[OpenAPIRegistration] = []
 
     async def aclose(self) -> None:

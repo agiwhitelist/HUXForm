@@ -185,7 +185,7 @@ class MCPHttpServer:
     def __init__(self, cfg: MCPServerConfig) -> None:
         self.cfg = cfg
         timeout = httpx.Timeout(connect=10.0, read=60.0, write=15.0, pool=10.0)
-        self._client = httpx.AsyncClient(timeout=timeout)
+        self._client = httpx.AsyncClient(timeout=timeout, trust_env=False)
         self._next_id = 1
         self._session_id: str | None = None
         self._stopped = False

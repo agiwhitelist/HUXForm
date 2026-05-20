@@ -119,7 +119,7 @@ async def _ddg_search_lite(query: str, limit: int) -> list[dict[str, Any]]:
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": "https://lite.duckduckgo.com/",
     }
-    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=headers) as client:
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=headers, trust_env=False) as client:
         r = await client.post(_DDG_LITE, data={"q": query, "kl": "wt-wt"})
         r.raise_for_status()
         html = r.text
@@ -179,7 +179,7 @@ async def _searxng_search(query: str, limit: int) -> dict[str, Any]:
     last_err: Exception | None = None
     for base in _SEARXNG_INSTANCES:
         try:
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers=headers) as client:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers=headers, trust_env=False) as client:
                 r = await client.get(
                     f"{base}/search",
                     params={"q": query, "format": "json", "safesearch": 0},
@@ -211,7 +211,7 @@ async def _searxng_search(query: str, limit: int) -> dict[str, Any]:
 
 
 async def _tavily_search(api_key: str, query: str, limit: int) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
         r = await client.post(
             "https://api.tavily.com/search",
             json={
@@ -242,7 +242,7 @@ async def _tavily_search(api_key: str, query: str, limit: int) -> dict[str, Any]
 
 
 async def _brave_search(api_key: str, query: str, limit: int) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
         r = await client.get(
             "https://api.search.brave.com/res/v1/web/search",
             params={"q": query, "count": int(limit)},
@@ -266,7 +266,7 @@ async def _brave_search(api_key: str, query: str, limit: int) -> dict[str, Any]:
 
 
 async def _serper_search(api_key: str, query: str, limit: int) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
         r = await client.post(
             "https://google.serper.dev/search",
             json={"q": query, "num": int(limit)},
@@ -343,7 +343,7 @@ async def web_fetch(url: str, *, max_bytes: int = 800_000, extract_links: bool =
         raise ValueError("url must start with http:// or https://")
 
     headers = {"User-Agent": _UA, "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9"}
-    async with httpx.AsyncClient(timeout=25.0, follow_redirects=True, headers=headers) as client:
+    async with httpx.AsyncClient(timeout=25.0, follow_redirects=True, headers=headers, trust_env=False) as client:
         r = await client.get(url)
         ctype = r.headers.get("content-type", "")
         raw = r.content[:max_bytes]
