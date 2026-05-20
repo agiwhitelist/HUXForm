@@ -45,6 +45,17 @@ apps/web/*.png
 apps/web/.playwright-cli/
 .playwright-cli/
 
+# Streaming/mission/test dev screenshots
+/stream*.png
+/mission-step*.png
+/evolve-*.png
+/test-*.png
+
+# Playwright YAML snapshots
+/*.yaml
+/apps/web/*.yaml
+/after-reload.yaml
+
 # Backend dev artifacts
 apps/api/.env
 apps/api/uvicorn.log

@@ -498,6 +498,57 @@ def register_builtin_tools(
 
     discover_cli_tools(_REGISTRY)
 
+    # Voice tools — only useful if vibevoice.cpp is configured on the host.
+    # Registration happens regardless; the handlers surface a clear error
+    # when the binary / model isn't set.
+    from .voice import VoiceConfig, VoiceEngine, VoiceUnavailable
+    _voice_engine = VoiceEngine(VoiceConfig.from_env())
+
+    async def _voice_tts(*, text: str, voice: str | None = None) -> dict[str, Any]:
+        try:
+            wav = await _voice_engine.tts(text, voice=voice)
+        except VoiceUnavailable as exc:
+            return {"ok": False, "unavailable": True, "reason": str(exc)}
+        return {
+            "ok": True,
+            "wav_base64": base64.b64encode(wav).decode("ascii"),
+            "sample_rate": _voice_engine.config.sample_rate,
+            "format": "wav",
+        }
+
+    async def _voice_stt(*, wav_path: str) -> dict[str, Any]:
+        try:
+            text = await _voice_engine.stt(wav_path)
+        except VoiceUnavailable as exc:
+            return {"ok": False, "unavailable": True, "reason": str(exc)}
+        return {"ok": True, "text": text}
+
+    voice_ok, voice_reason = _voice_engine.config.is_ready()
+    voice_desc_suffix = "" if voice_ok else f" (currently disabled: {voice_reason})"
+
+    _REGISTRY.register(Tool(
+        name="voice.tts",
+        title="Speak (text → audio)",
+        description=("Render text to a mono 24kHz WAV via vibevoice.cpp. "
+                     "Returns base64-encoded WAV bytes." + voice_desc_suffix),
+        risk="read",
+        requires_approval=False,
+        params_schema={"text": "string", "voice?": "string"},
+        handler=_voice_tts,
+        examples=["welcome to huxform"],
+    ))
+
+    _REGISTRY.register(Tool(
+        name="voice.stt",
+        title="Transcribe (audio → text)",
+        description=("Transcribe an attached WAV (mono, 24kHz) into text via "
+                     "vibevoice.cpp. Pass the server-side wav_path." + voice_desc_suffix),
+        risk="read",
+        requires_approval=False,
+        params_schema={"wav_path": "string"},
+        handler=_voice_stt,
+    ))
+
     # Tool Discovery v0: tools.discover / tools.install / tools.uninstall.
     # Only registered when the lifespan passed in a manager + capability registry.
     if mcp_manager is not None and capability_registry is not None:

@@ -399,18 +399,22 @@ async def stream_events(turn: Turn) -> AsyncIterator[dict[str, Any]]:
     q = turn.subscribe()
     try:
         terminal = {"final_result", "failed", "cancelled"}
-        # If turn already finished, replay then end after a short grace
+        # If the turn already finished BEFORE we subscribed, its terminal
+        # event is part of the history replay — don't close the stream on
+        # it (otherwise EventSource reconnects, replays again, and we end
+        # up in an iframe-reset loop spamming task.final_result every
+        # ~3s). Only a *live* terminal event ends the stream.
         already_done = turn.status in {"done", "failed", "cancelled"}
         while True:
             try:
                 ev = await asyncio.wait_for(q.get(), timeout=20.0)
             except asyncio.TimeoutError:
-                if already_done:
-                    return
+                # heartbeat keeps the EventSource warm whether the turn is
+                # live or already-done; closing here would force reconnect
                 yield {"type": "heartbeat", "ts": time.time()}
                 continue
             yield ev
-            if ev.get("type") in terminal:
+            if ev.get("type") in terminal and not already_done:
                 await asyncio.sleep(0.05)
                 return
     finally:

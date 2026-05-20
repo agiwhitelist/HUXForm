@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import time
+from collections import defaultdict
 from typing import Any
 
 from .tasks import Turn
@@ -49,6 +51,56 @@ class Executor:
     def __init__(self, registry: ToolRegistry, approval_timeout: float = 300.0) -> None:
         self.registry = registry
         self.approval_timeout = approval_timeout
+        # Per-tool call stats: name -> {count, total_ms, fail, last_ms, p_durations}
+        # `p_durations` keeps a rolling window of the last 200 durations so we
+        # can compute approximate p50/p95 without a real histogram.
+        self._stats: dict[str, dict[str, Any]] = defaultdict(
+            lambda: {"count": 0, "total_ms": 0.0, "fail": 0, "last_ms": 0.0, "p_durations": []}
+        )
+
+    def stats(self) -> dict[str, Any]:
+        """Aggregate per-tool latency + failure stats for the cost dashboard."""
+        out = []
+        grand_total = 0.0
+        grand_count = 0
+        for name, s in sorted(self._stats.items()):
+            durations = sorted(s["p_durations"])
+            n = len(durations)
+            p50 = durations[n // 2] if n else 0.0
+            p95 = durations[int(n * 0.95)] if n else 0.0
+            avg = (s["total_ms"] / s["count"]) if s["count"] else 0.0
+            grand_total += s["total_ms"]
+            grand_count += s["count"]
+            out.append({
+                "tool": name,
+                "count": s["count"],
+                "fail": s["fail"],
+                "total_ms": round(s["total_ms"], 1),
+                "avg_ms": round(avg, 1),
+                "p50_ms": round(p50, 1),
+                "p95_ms": round(p95, 1),
+                "last_ms": round(s["last_ms"], 1),
+            })
+        out.sort(key=lambda r: -r["total_ms"])
+        return {
+            "tools": out,
+            "totals": {
+                "calls": grand_count,
+                "total_ms": round(grand_total, 1),
+            },
+        }
+
+    def _record(self, name: str, duration_ms: float, ok: bool) -> None:
+        s = self._stats[name]
+        s["count"] += 1
+        s["total_ms"] += duration_ms
+        s["last_ms"] = duration_ms
+        if not ok:
+            s["fail"] += 1
+        ring: list[float] = s["p_durations"]
+        ring.append(duration_ms)
+        if len(ring) > 200:
+            del ring[0]
 
     async def call(self, turn: Turn, name: str, params: dict[str, Any]) -> Any:
         if turn.cancelled:
@@ -88,6 +140,7 @@ class Executor:
             turn.emit({"type": "tool_dry_run", "tool": name, "preview": _preview(preview)})
             return {"dry_run": True, "preview": preview}
 
+        start = time.perf_counter()
         try:
             kwargs = dict(params or {})
             sig = inspect.signature(tool.handler)
@@ -95,10 +148,19 @@ class Executor:
                 kwargs["turn_ref"] = turn
             result = await tool.handler(**kwargs)
         except Exception as exc:
-            turn.emit({"type": "tool_error", "tool": name, "message": str(exc)})
+            duration_ms = (time.perf_counter() - start) * 1000.0
+            self._record(name, duration_ms, ok=False)
+            turn.emit({"type": "tool_error", "tool": name, "message": str(exc), "duration_ms": round(duration_ms, 1)})
             raise
 
-        turn.emit({"type": "tool_result", "tool": name, "result_preview": _preview(result)})
+        duration_ms = (time.perf_counter() - start) * 1000.0
+        self._record(name, duration_ms, ok=True)
+        turn.emit({
+            "type": "tool_result",
+            "tool": name,
+            "result_preview": _preview(result),
+            "duration_ms": round(duration_ms, 1),
+        })
         return result
 
     async def _await_approval(self, turn: Turn, tool: Tool, params: dict[str, Any]) -> bool:

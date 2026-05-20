@@ -150,6 +150,7 @@ class Director:
         *,
         attached_files: list[dict] | None = None,
         thread_summary: str | None = None,
+        preset_hint: str | None = None,
     ) -> DirectedPlan:
         ctx_lines: list[str] = [f"User intent:\n{goal}"]
         if attached_files:
@@ -160,6 +161,8 @@ class Director:
             ctx_lines.append(f"\nAttached files (accessible via files.read tool):\n{files_summary}")
         if thread_summary:
             ctx_lines.append(f"\nPrior context in this thread:\n{thread_summary}")
+        if preset_hint:
+            ctx_lines.append(f"\n{preset_hint}")
         ctx_lines.append(f"\nAvailable tool capabilities:\n{describe_tools()}")
         ctx_lines.append("\nReturn the Director JSON now.")
         user_msg = "\n".join(ctx_lines)
@@ -200,6 +203,21 @@ class Director:
             needs_user_input=bool(data.get("needs_user_input", False)),
             visual_brief=brief,
         )
+
+        if plan.visual_brief is None:
+            # Director didn't return a usable brief; spec is "always required",
+            # so synthesize a minimal one so downstream codegen never sees None.
+            plan.visual_brief = VisualBrief(
+                metaphor="",
+                palette={},
+                typography={},
+                layout="",
+                interaction="",
+                motion="",
+                microcopy_tone="",
+                banned_patterns=[],
+                inspirations=[],
+            )
 
         auto = bool(data.get("auto_proceed", True))
         return DirectedPlan(plan=plan, answer_text=None, auto_proceed=auto)

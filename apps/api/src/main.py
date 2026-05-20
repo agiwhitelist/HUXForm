@@ -53,7 +53,7 @@ from sse_starlette.sse import EventSourceResponse
 from .audit import Audit
 from .codegen import UIGenerator
 from .director import Director
-from .discovery import CapabilityRegistry, hydrate_installed
+from .discovery import CapabilityRegistry, hydrate_installed, uninstall_mcp_server
 from .executor import ApprovalDenied, Cancelled, Executor, ToolNotFound
 from .llm import LLMClient
 from .mcp_client import MCPManager
@@ -61,11 +61,13 @@ from .narrator import Narrator
 from .openapi_adapter import OpenAPIAdapter, OpenAPIRegistration
 from .mission import drive_mission, stream_mission_events
 from .persistence import EventPersistor, Persistence
+from .presets import Preset, PresetStore, preset_hint
 from .researcher import Researcher
 from .runtime import set_registry
 from .runtime_stub import RUNTIME_STUB, inject_runtime
 from .tasks import FileRecord, Mission, Registry, Turn, stream_events
 from .tools import get_registry, register_builtin_tools
+from .voice import VoiceConfig, VoiceEngine, VoiceUnavailable, transcode_to_wav_24k_mono
 
 
 log = logging.getLogger("agui")
@@ -94,6 +96,9 @@ async def lifespan(app: FastAPI):
     audit = Audit(AUDIT_DB_PATH)
 
     capability_registry = CapabilityRegistry(DATA_DIR / "capability_registry.json")
+    preset_store = PresetStore(DATA_DIR / "presets.json")
+    share_store = ShareStore(DATA_DIR / "shares.json")
+    voice_engine = VoiceEngine(VoiceConfig.from_env())
 
     # Single ToolRegistry instance shared by builtin tools, the MCP manager,
     # and the OpenAPI adapter. Builtin tools are populated first; MCP /
@@ -128,6 +133,9 @@ async def lifespan(app: FastAPI):
     app.state.mcp = mcp
     app.state.openapi = openapi
     app.state.capability_registry = capability_registry
+    app.state.preset_store = preset_store
+    app.state.share_store = share_store
+    app.state.voice_engine = voice_engine
     app.state.director = Director(llm)
     app.state.codegen = UIGenerator(llm, tools)
     app.state.executor = Executor(tools)
@@ -196,6 +204,81 @@ class CreateMissionBody(BaseModel):
     goal: str = Field(min_length=1, max_length=4000)
 
 
+class PresetBody(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    palette: dict[str, str] = Field(default_factory=dict)
+    typography: dict[str, str] = Field(default_factory=dict)
+    banned_extra: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
+class ActivatePresetBody(BaseModel):
+    name: str
+
+
+class RouteBody(BaseModel):
+    thread_id: str
+    message: str = Field(min_length=1, max_length=4000)
+
+
+class ShareCreateBody(BaseModel):
+    public: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Share store — token → frozen snapshot of a turn's generated UI + plan
+# ---------------------------------------------------------------------------
+
+
+class ShareStore:
+    """Append-only JSON-on-disk store of public read-only share tokens.
+
+    Each token maps to a `turn_id`. The snapshot endpoint reads the live
+    turn (HTML + plan + final_result) at view time, so the share view
+    always reflects the *last persisted* state of that turn — it freezes
+    the URL, not the data behind it. Tokens can be revoked.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.tokens: dict[str, dict[str, Any]] = {}
+        if self.path.exists():
+            try:
+                self.tokens = json.loads(self.path.read_text("utf-8")) or {}
+            except Exception as exc:
+                log.warning("share store load failed: %s", exc)
+
+    def _save(self) -> None:
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp.write_text(json.dumps(self.tokens, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(self.path)
+
+    def create(self, turn_id: str) -> str:
+        token = uuid.uuid4().hex[:20]
+        self.tokens[token] = {"turn_id": turn_id, "created_at": time.time()}
+        self._save()
+        return token
+
+    def resolve(self, token: str) -> str | None:
+        entry = self.tokens.get(token)
+        return entry["turn_id"] if entry else None
+
+    def revoke(self, token: str) -> bool:
+        if token in self.tokens:
+            del self.tokens[token]
+            self._save()
+            return True
+        return False
+
+    def for_turn(self, turn_id: str) -> list[dict[str, Any]]:
+        return [
+            {"token": t, **info}
+            for t, info in self.tokens.items()
+            if info.get("turn_id") == turn_id
+        ]
+
+
 # ---------------------------------------------------------------------------
 # Health / tools / audit
 # ---------------------------------------------------------------------------
@@ -233,6 +316,226 @@ async def register_openapi(body: OpenAPIRegisterBody, request: Request) -> dict[
 @app.get("/api/audit")
 async def get_audit(request: Request, turn_id: str | None = None, limit: int = 100) -> dict[str, Any]:
     return {"entries": request.app.state.audit.tail(turn_id=turn_id, limit=min(limit, 500))}
+
+
+# ---------------------------------------------------------------------------
+# Voice — vibevoice.cpp wrapper
+# ---------------------------------------------------------------------------
+
+
+class VoiceSynthBody(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    voice: str | None = None
+
+
+@app.get("/api/voice/health")
+async def voice_health(request: Request) -> dict[str, Any]:
+    engine: VoiceEngine = request.app.state.voice_engine
+    ok, reason = engine.config.is_ready()
+    return {
+        "available": ok,
+        "reason": reason,
+        "sample_rate": engine.config.sample_rate,
+    }
+
+
+@app.post("/api/voice/transcribe")
+async def voice_transcribe(request: Request, file: UploadFile = File(...)) -> dict[str, Any]:
+    engine: VoiceEngine = request.app.state.voice_engine
+    ok, reason = engine.config.is_ready()
+    if not ok:
+        raise HTTPException(503, reason or "voice not configured")
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "empty upload")
+
+    # Browser MediaRecorder usually emits webm/opus. vibevoice-cli wants WAV
+    # mono 24kHz, so we transcode here. If the input is already a 24kHz WAV
+    # we skip the round-trip.
+    suffix = ".webm"
+    name = (file.filename or "").lower()
+    if name.endswith((".wav", ".ogg", ".webm", ".m4a", ".mp3", ".mp4")):
+        suffix = "." + name.rsplit(".", 1)[-1]
+    if suffix == ".wav":
+        wav_bytes = raw
+    else:
+        try:
+            wav_bytes = await transcode_to_wav_24k_mono(raw, in_suffix=suffix)
+        except RuntimeError as exc:
+            raise HTTPException(500, f"transcode failed: {exc}")
+
+    # Persist to a temp file and feed the CLI.
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        f.write(wav_bytes)
+        wav_path = f.name
+    try:
+        text = await engine.stt(wav_path)
+    except VoiceUnavailable as exc:
+        raise HTTPException(503, str(exc))
+    except Exception as exc:
+        raise HTTPException(500, f"transcription failed: {exc}")
+    finally:
+        try:
+            Path(wav_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+    return {"text": text, "sample_rate": engine.config.sample_rate}
+
+
+@app.post("/api/voice/synthesize")
+async def voice_synthesize(body: VoiceSynthBody, request: Request) -> dict[str, Any]:
+    state = request.app.state
+    engine: VoiceEngine = state.voice_engine
+    ok, reason = engine.config.is_ready()
+    if not ok:
+        raise HTTPException(503, reason or "voice not configured")
+    try:
+        wav = await engine.tts(body.text, voice=body.voice)
+    except VoiceUnavailable as exc:
+        raise HTTPException(503, str(exc))
+    except Exception as exc:
+        raise HTTPException(500, f"synthesis failed: {exc}")
+
+    # Stash the WAV in the file store so the caller gets a normal file_id
+    # back, which agui.readFile / <audio src> can pick up.
+    digest = hashlib.sha256(wav).hexdigest()[:24]
+    fid = digest
+    path = FILES_DIR / fid
+    if not path.exists():
+        path.write_bytes(wav)
+    rec = FileRecord(
+        id=fid, name=f"speech-{fid[:6]}.wav", mime="audio/wav",
+        size=len(wav), path=str(path), created_at=time.time(),
+    )
+    await state.registry.add_file(rec)
+    return {"file": rec.to_public(), "sample_rate": engine.config.sample_rate}
+
+
+@app.get("/api/audit/stats")
+async def audit_stats(request: Request) -> dict[str, Any]:
+    """Cost + per-tool latency dashboard. Aggregated in-memory by Executor.
+
+    Returns: { tools: [...], totals: {calls, total_ms}, usage: {turns, input_tokens, output_tokens} }
+    """
+    state = request.app.state
+    stats = state.executor.stats()
+    registry: Registry = state.registry
+    total_in = 0
+    total_out = 0
+    turns = 0
+    for turn in registry.turns.values():
+        turns += 1
+        total_in += int(turn.usage.get("input_tokens") or 0)
+        total_out += int(turn.usage.get("output_tokens") or 0)
+    stats["usage"] = {
+        "turns": turns,
+        "input_tokens": total_in,
+        "output_tokens": total_out,
+    }
+    return stats
+
+
+# ---------------------------------------------------------------------------
+# Capabilities — what tool sources are currently installed
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/capabilities")
+async def list_capabilities(request: Request) -> dict[str, Any]:
+    state = request.app.state
+    cap: CapabilityRegistry = state.capability_registry
+    mcp: MCPManager = state.mcp
+    tools_by_alias: dict[str, list[dict[str, Any]]] = {}
+    for name, tool in mcp.registry.tools.items():
+        if not name.startswith("mcp."):
+            continue
+        try:
+            _, alias, *_ = name.split(".", 2)
+        except ValueError:
+            continue
+        tools_by_alias.setdefault(alias, []).append({
+            "name": name,
+            "title": tool.title,
+            "risk": tool.risk,
+            "description": tool.description[:200],
+        })
+    out_mcp = []
+    for entry in cap.mcp:
+        out_mcp.append({
+            "alias": entry.alias,
+            "command": entry.command,
+            "args": list(entry.args),
+            "install_type": entry.install_type,
+            "source_url": entry.source_url,
+            "description": entry.description,
+            "trust_score": entry.trust_score,
+            "running": entry.alias in mcp.servers,
+            "tools": tools_by_alias.get(entry.alias, []),
+        })
+    out_openapi = []
+    for entry in cap.openapi:
+        out_openapi.append({
+            "alias": entry.alias,
+            "spec_url": entry.spec_url,
+            "base_url": entry.base_url,
+            "trust_score": entry.trust_score,
+        })
+    return {"mcp": out_mcp, "openapi": out_openapi}
+
+
+@app.delete("/api/capabilities/mcp/{alias}")
+async def uninstall_capability(alias: str, request: Request) -> dict[str, Any]:
+    state = request.app.state
+    try:
+        result = await uninstall_mcp_server(
+            manager=state.mcp,
+            registry=state.capability_registry,
+            alias=alias,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Presets — org-level visual defaults the Director respects
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/presets")
+async def list_presets(request: Request) -> dict[str, Any]:
+    return request.app.state.preset_store.to_dict()
+
+
+@app.post("/api/presets")
+async def upsert_preset(body: PresetBody, request: Request) -> dict[str, Any]:
+    store: PresetStore = request.app.state.preset_store
+    store.upsert(Preset(
+        name=body.name,
+        palette=body.palette,
+        typography=body.typography,
+        banned_extra=body.banned_extra,
+        notes=body.notes,
+    ))
+    return {"ok": True, "preset": store.presets[body.name].to_dict()}
+
+
+@app.delete("/api/presets/{name}")
+async def delete_preset(name: str, request: Request) -> dict[str, Any]:
+    store: PresetStore = request.app.state.preset_store
+    if not store.delete(name):
+        raise HTTPException(400, "cannot delete default or unknown preset")
+    return {"ok": True}
+
+
+@app.post("/api/presets/activate")
+async def activate_preset(body: ActivatePresetBody, request: Request) -> dict[str, Any]:
+    store: PresetStore = request.app.state.preset_store
+    if not store.set_active(body.name):
+        raise HTTPException(404, "preset not found")
+    return {"ok": True, "active": store.active}
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +692,13 @@ class _ScriptStripper:
             self.deferred.append(self.buffer[:end])
             self.buffer = self.buffer[end:]
         joined = "".join(out)
+        # Some models close their HTML with a stray ``` (or sometimes a
+        # mid-stream ```html fence). Stripping only the trailing fence in
+        # finalize_safe_tail isn't enough because the fence often arrives
+        # in an earlier chunk and is already flushed. Filter standalone
+        # fence lines out of every chunk before they reach the browser.
+        if "```" in joined:
+            joined = _strip_fence_lines(joined)
         if joined:
             self._sent_any = True
         return joined
@@ -403,10 +713,23 @@ class _ScriptStripper:
         if rest.lower().lstrip().startswith("<script"):
             # Incomplete trailing script — drop it.
             return ""
-        return rest
+        return _strip_fence_lines(rest)
 
     def deferred_scripts(self) -> str:
         return "".join(self.deferred)
+
+
+def _strip_fence_lines(text: str) -> str:
+    """Remove any line that is solely a ``` markdown fence (with optional
+    `html` language tag). Preserves lines that contain ``` mixed with real
+    content, since those are unlikely to be markdown markers."""
+    out: list[str] = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped in ("```", "```html", "```HTML"):
+            continue
+        out.append(line)
+    return "".join(out)
 
 
 def _build_stream_opener(turn: Turn) -> str:
@@ -524,6 +847,12 @@ async def get_turn_ui_stream(turn_id: str, request: Request) -> StreamingRespons
         tail = stripper.finalize_safe_tail()
         if tail:
             yield tail
+
+        # Belt-and-suspenders: kill the boot indicator at stream end even
+        # if the LLM never emitted a recognisable `<body>` tag (some models
+        # return body content without the wrapper).
+        if not first_content_seen:
+            yield "<style>.__huxform_boot{display:none!important;}</style>\n"
 
         # Inject the runtime stub BEFORE the deferred scripts so window.agui
         # is alive by the time the LLM's scripts run.
@@ -748,6 +1077,151 @@ async def list_thread_missions(thread_id: str, request: Request) -> dict[str, An
     return {"missions": [m.to_dict() for m in sorted(missions, key=lambda m: m.created_at, reverse=True)]}
 
 
+# ---------------------------------------------------------------------------
+# Share — public read-only URL with frozen state
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/turns/{turn_id}/share")
+async def create_share(turn_id: str, body: ShareCreateBody, request: Request) -> dict[str, Any]:
+    state = request.app.state
+    turn = state.registry.get_turn(turn_id)
+    if turn is None:
+        raise HTTPException(404, "turn not found")
+    if turn.html is None:
+        raise HTTPException(409, "turn has no rendered UI yet")
+    if not body.public:
+        raise HTTPException(400, "non-public shares not supported")
+    token = state.share_store.create(turn_id)
+    return {"token": token, "url": f"/share/{token}"}
+
+
+@app.delete("/api/share/{token}")
+async def revoke_share(token: str, request: Request) -> dict[str, Any]:
+    ok = request.app.state.share_store.revoke(token)
+    if not ok:
+        raise HTTPException(404, "share not found")
+    return {"ok": True}
+
+
+@app.get("/api/share/{token}")
+async def share_snapshot(token: str, request: Request) -> dict[str, Any]:
+    state = request.app.state
+    turn_id = state.share_store.resolve(token)
+    if turn_id is None:
+        raise HTTPException(404, "share not found")
+    turn = state.registry.get_turn(turn_id)
+    if turn is None:
+        raise HTTPException(404, "turn not found")
+    return {
+        "turn": {
+            "id": turn.id,
+            "thread_id": turn.thread_id,
+            "user_message": turn.user_message,
+            "created_at": turn.created_at,
+            "status": turn.status,
+            "plan": turn.plan.to_dict() if turn.plan else None,
+            "final_result": turn.final_result,
+            "state": turn.state,
+        },
+        "frozen": True,
+    }
+
+
+@app.get("/share/{token}", response_class=HTMLResponse)
+async def share_view(token: str, request: Request) -> HTMLResponse:
+    """Public, read-only view of a turn. Embeds the generated HTML with the
+    runtime stub stripped — tool calls and approvals are gone, so the page
+    is a static snapshot of whatever shape the turn produced."""
+    state = request.app.state
+    turn_id = state.share_store.resolve(token)
+    if turn_id is None:
+        raise HTTPException(404, "share not found")
+    turn = state.registry.get_turn(turn_id)
+    if turn is None or turn.html is None:
+        raise HTTPException(404, "share has no rendered UI")
+    title = (turn.plan.visual_concept if turn.plan else "shared") or "shared"
+    title_safe = title.replace("<", "&lt;").replace(">", "&gt;")
+    # No runtime stub injection — the iframe content is the bare LLM HTML.
+    # That means agui.* calls inside the document silently do nothing, which
+    # is exactly the "frozen state" semantic we want.
+    body = turn.html
+    return HTMLResponse(
+        f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>HUXForm · {title_safe}</title>
+<style>html,body{{margin:0;padding:0;height:100%;background:#0b0d10;color:#e6e8ef;font:14px/1.5 ui-sans-serif,system-ui,sans-serif}}
+.frame{{position:relative;height:100%}}
+.badge{{position:fixed;left:14px;bottom:14px;padding:6px 10px;background:#1c2230;border:1px solid #2a2f3d;border-radius:8px;font-size:11px;letter-spacing:.18em;text-transform:uppercase;opacity:.85;z-index:9999}}
+.badge a{{color:#7aa2ff;text-decoration:none}}</style></head>
+<body><div class="frame">{body}</div>
+<div class="badge">huxform · shared snapshot · <a href="/">make your own</a></div>
+</body></html>"""
+    )
+
+
+# ---------------------------------------------------------------------------
+# Refine vs new turn — lightweight classifier for follow-up routing
+# ---------------------------------------------------------------------------
+
+
+_ROUTE_SYSTEM = """You route a user's follow-up message inside an ongoing HUXForm session.
+
+Given the previous turn's user message + the new follow-up, decide ONE of:
+
+  "refine"   — the user wants the same generated UI to change shape, palette,
+               density, or content tweak. Examples: "make it warmer", "add an
+               export button", "show the same data as a sparkline grid",
+               "denser table", "switch to a circular dial".
+  "new_turn" — the user is asking for a new task that needs its own mini-app.
+               Examples: "now find me payment processors", "deploy it",
+               "what's the weather in Paris", anything topically different.
+
+Output ONLY one JSON object — no prose, no markdown:
+  { "action": "refine" | "new_turn", "confidence": 0..1, "reason": "<10 words" }
+"""
+
+
+@app.post("/api/route")
+async def route_message(body: RouteBody, request: Request) -> dict[str, Any]:
+    """Classify a follow-up: should we agui.evolve() the current turn, or
+    spawn a new one? Frontend decides what to do with the answer."""
+    state = request.app.state
+    registry: Registry = state.registry
+    thread = registry.get_thread(body.thread_id)
+    if thread is None:
+        raise HTTPException(404, "thread not found")
+    turns = registry.list_thread_turns(body.thread_id)
+    if not turns:
+        return {"action": "new_turn", "confidence": 1.0, "reason": "no prior turn", "target_turn_id": None}
+    last = turns[-1]
+    prompt = (
+        f"Previous user message:\n{last.user_message}\n\n"
+        f"Previous presentation_mode: {last.plan.presentation_mode if last.plan else 'unknown'}\n"
+        f"Previous visual_concept: {last.plan.visual_concept if last.plan else 'unknown'}\n\n"
+        f"Follow-up:\n{body.message}\n\nReturn the JSON now."
+    )
+    try:
+        reply = await state.llm.complete(
+            system=_ROUTE_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+        )
+        from .llm import extract_json
+        data = extract_json(reply.text)
+    except Exception as exc:
+        log.exception("route classifier failed")
+        return {"action": "new_turn", "confidence": 0.0, "reason": f"router error: {exc}", "target_turn_id": last.id}
+
+    action = data.get("action") if isinstance(data, dict) else None
+    if action not in ("refine", "new_turn"):
+        action = "new_turn"
+    return {
+        "action": action,
+        "confidence": float(data.get("confidence") or 0.5),
+        "reason": str(data.get("reason") or ""),
+        "target_turn_id": last.id if action == "refine" else None,
+    }
+
+
 @app.post("/api/turns/{turn_id}/files")
 async def attach_file_to_turn(turn_id: str, body: AttachFileBody, request: Request) -> dict[str, Any]:
     registry: Registry = request.app.state.registry
@@ -792,10 +1266,12 @@ async def _drive_turn(turn: Turn, state: Any) -> None:
         prior = registry.list_thread_turns(turn.thread_id)[:-1] if thread else []
         thread_summary = _summarize_prior_turns(prior)
 
+        active_preset = state.preset_store.get_active()
         directed = await state.director.direct(
             turn.user_message,
             attached_files=attached,
             thread_summary=thread_summary,
+            preset_hint=preset_hint(active_preset),
         )
         turn.plan = directed.plan
         turn.auto_proceed = turn.auto_proceed and directed.auto_proceed

@@ -102,10 +102,15 @@ RUNTIME_STUB = """<script>(function(){
       send({ kind: 'evolve', id: id, refine_note: refineNote });
     });
   }
+  function subscribe(handler){
+    listeners.push(handler);
+    return function(){ var i = listeners.indexOf(handler); if (i>=0) listeners.splice(i,1); };
+  }
   window.agui = {
     plan: null, tools: [], goal: '', taskId: '', files: [],
     research: { summary: '', steps: [], stopped: '' },
     callTool: call,
+    searchTools: function(query){ return call('tools.discover', { query: String(query || '') }); },
     evolve: evolve,
     setState: function(patch){ return call('task.set_state', { patch: patch }); },
     getState: function(){ return Object.assign({}, stateSnapshot); },
@@ -113,10 +118,8 @@ RUNTIME_STUB = """<script>(function(){
     log: function(level, message){ return call('task.log', { level: level || 'info', message: String(message) }); },
     readFile: function(file_id){ return call('files.read', { file_id: file_id }); },
     uploadFile: upload,
-    onEvent: function(handler){
-      listeners.push(handler);
-      return function(){ var i = listeners.indexOf(handler); if (i>=0) listeners.splice(i,1); };
-    },
+    onEvent: subscribe,
+    onTaskUpdate: subscribe,
     askApproval: function(label, details){
       return new Promise(function(resolve){
         var id = 'a' + (nextId++);

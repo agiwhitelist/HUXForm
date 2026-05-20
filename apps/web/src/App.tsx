@@ -20,6 +20,7 @@ import {
 } from "react";
 import { api, FileRec, Thread, ThreadSummary, Turn as TurnSnap } from "./api";
 import { ApprovalRequest, Bridge } from "./bridge";
+import { useMic } from "./mic";
 import { Stage } from "./Turn";
 
 type Mode =
@@ -56,6 +57,7 @@ export function App() {
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [planSwatches, setPlanSwatches] = useState<Record<string, string[]>>({});
   const bridgesByTurn = useRef<Map<string, Bridge>>(new Map());
 
@@ -245,6 +247,7 @@ export function App() {
       <Corner
         onHistory={() => setHistoryOpen(true)}
         onNew={newSession}
+        onSettings={() => setSettingsOpen(true)}
         canNew={mode.kind === "session"}
       />
 
@@ -277,6 +280,10 @@ export function App() {
       {approvals.length > 0 && (
         <ApprovalOverlay requests={approvals} onResolve={resolveApproval} />
       )}
+
+      {settingsOpen && (
+        <SettingsPanel onClose={() => setSettingsOpen(false)} />
+      )}
     </div>
   );
 }
@@ -300,12 +307,16 @@ function Sigil() {
 function Corner(props: {
   onHistory: () => void;
   onNew: () => void;
+  onSettings: () => void;
   canNew: boolean;
 }) {
   return (
     <div className="corner">
       <button className="corner-btn" onClick={props.onHistory}>
         Sessions <span className="kbd">\</span>
+      </button>
+      <button className="corner-btn" onClick={props.onSettings}>
+        Settings
       </button>
       {props.canNew && (
         <button className="corner-btn" onClick={props.onNew}>
@@ -330,6 +341,10 @@ function Landing(props: {
   const [err, setErr] = useState<string | null>(null);
   const [hintIdx, setHintIdx] = useState(() => Math.floor(Math.random() * HINTS.length));
   const [verbIdx, setVerbIdx] = useState(0);
+  const mic = useMic({
+    onTranscript: (t) => { if (t) setGoal((g) => (g ? g + " " : "") + t); },
+    onError: (m) => setErr(m),
+  });
 
   useEffect(() => {
     const h = window.setInterval(() => {
@@ -439,6 +454,17 @@ function Landing(props: {
             )}
 
             <span className="prompt-spacer" />
+
+            {mic.available && (
+              <button
+                className={`prompt-mic mic-${mic.state}`}
+                onClick={() => mic.toggle()}
+                title={mic.state === "recording" ? "stop & transcribe" : "voice in"}
+                type="button"
+              >
+                {micLabel(mic.state)}
+              </button>
+            )}
 
             <button
               className="prompt-key"
@@ -629,8 +655,342 @@ function ApprovalOverlay(props: {
 
 
 /* -------------------------------------------------------------------- */
+/* Settings panel — capability registry, cost dashboard, presets         */
+/* -------------------------------------------------------------------- */
+
+type Capabilities = Awaited<ReturnType<typeof api.capabilities>>;
+type AuditStats = Awaited<ReturnType<typeof api.auditStats>>;
+type Presets = Awaited<ReturnType<typeof api.presets>>;
+
+function SettingsPanel(props: { onClose: () => void }) {
+  const [tab, setTab] = useState<"caps" | "cost" | "presets">("caps");
+  const [caps, setCaps] = useState<Capabilities | null>(null);
+  const [stats, setStats] = useState<AuditStats | null>(null);
+  const [presets, setPresets] = useState<Presets | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [working, setWorking] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setErr(null);
+    try {
+      const [c, s, p] = await Promise.all([
+        api.capabilities(),
+        api.auditStats(),
+        api.presets(),
+      ]);
+      setCaps(c);
+      setStats(s);
+      setPresets(p);
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  // close on Esc
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key === "Escape") props.onClose();
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [props.onClose]);
+
+  const uninstall = useCallback(async (alias: string) => {
+    if (!window.confirm(`Uninstall MCP server "${alias}"?`)) return;
+    setWorking(alias);
+    try {
+      await api.uninstallCapability(alias);
+      await refresh();
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
+    } finally {
+      setWorking(null);
+    }
+  }, [refresh]);
+
+  const activate = useCallback(async (name: string) => {
+    try {
+      await api.activatePreset(name);
+      await refresh();
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
+    }
+  }, [refresh]);
+
+  return (
+    <div className="settings-overlay" onClick={props.onClose}>
+      <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
+        <header className="settings-h">
+          <h2>Settings</h2>
+          <div className="settings-tabs">
+            <button className={tab === "caps" ? "on" : ""} onClick={() => setTab("caps")}>
+              Capabilities {caps ? `· ${caps.mcp.length}` : ""}
+            </button>
+            <button className={tab === "cost" ? "on" : ""} onClick={() => setTab("cost")}>
+              Cost & latency
+            </button>
+            <button className={tab === "presets" ? "on" : ""} onClick={() => setTab("presets")}>
+              Presets {presets ? `· active: ${presets.active}` : ""}
+            </button>
+            <span className="esc">esc · close</span>
+          </div>
+        </header>
+
+        {err && <div className="settings-err">{err}</div>}
+
+        <div className="settings-body">
+          {tab === "caps" && caps && (
+            <CapsTab caps={caps} working={working} onUninstall={uninstall} />
+          )}
+          {tab === "cost" && stats && (
+            <CostTab stats={stats} />
+          )}
+          {tab === "presets" && presets && (
+            <PresetsTab presets={presets} onActivate={activate} onRefresh={refresh} setErr={setErr} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CapsTab(props: {
+  caps: Capabilities;
+  working: string | null;
+  onUninstall: (alias: string) => void;
+}) {
+  const { mcp, openapi } = props.caps;
+  return (
+    <div className="caps-tab">
+      <h3>MCP servers</h3>
+      {mcp.length === 0 && <p className="muted">No MCP servers installed via discovery yet. Use <code>tools.discover</code> from any generated UI to find one, then <code>tools.install</code> to spawn it.</p>}
+      <table className="caps-table">
+        {mcp.length > 0 && (
+          <thead><tr><th>alias</th><th>command</th><th>trust</th><th>tools</th><th>state</th><th></th></tr></thead>
+        )}
+        <tbody>
+          {mcp.map((m) => (
+            <tr key={m.alias}>
+              <td><b>{m.alias}</b></td>
+              <td><code>{m.command} {m.args.join(" ")}</code></td>
+              <td>{m.trust_score != null ? m.trust_score.toFixed(2) : "—"}</td>
+              <td>{m.tools.length}</td>
+              <td>{m.running ? <span className="pill-running">running</span> : <span className="pill-stopped">stopped</span>}</td>
+              <td>
+                <button
+                  className="danger"
+                  disabled={props.working === m.alias}
+                  onClick={() => props.onUninstall(m.alias)}
+                >
+                  {props.working === m.alias ? "..." : "Uninstall"}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <h3>OpenAPI</h3>
+      {openapi.length === 0 ? (
+        <p className="muted">None registered. POST to <code>/api/tools/openapi</code> to add a spec.</p>
+      ) : (
+        <ul>
+          {openapi.map((o) => (
+            <li key={o.alias}>
+              <b>{o.alias}</b> · <code>{o.spec_url}</code>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function CostTab(props: { stats: AuditStats }) {
+  const { tools, totals, usage } = props.stats;
+  return (
+    <div className="cost-tab">
+      <div className="cost-totals">
+        <div><span className="k">tool calls</span><span className="v">{totals.calls}</span></div>
+        <div><span className="k">tool time</span><span className="v">{(totals.total_ms / 1000).toFixed(2)}s</span></div>
+        <div><span className="k">turns</span><span className="v">{usage.turns}</span></div>
+        <div><span className="k">input tok</span><span className="v">{usage.input_tokens.toLocaleString()}</span></div>
+        <div><span className="k">output tok</span><span className="v">{usage.output_tokens.toLocaleString()}</span></div>
+      </div>
+
+      <table className="cost-table">
+        <thead>
+          <tr>
+            <th>tool</th><th>calls</th><th>fail</th>
+            <th>avg ms</th><th>p50</th><th>p95</th><th>last</th>
+          </tr>
+        </thead>
+        <tbody>
+          {tools.length === 0 && (
+            <tr><td colSpan={7} className="muted">No tool calls yet. Start a session.</td></tr>
+          )}
+          {tools.map((t) => (
+            <tr key={t.tool}>
+              <td><code>{t.tool}</code></td>
+              <td>{t.count}</td>
+              <td className={t.fail > 0 ? "bad" : ""}>{t.fail}</td>
+              <td>{t.avg_ms.toFixed(0)}</td>
+              <td>{t.p50_ms.toFixed(0)}</td>
+              <td>{t.p95_ms.toFixed(0)}</td>
+              <td>{t.last_ms.toFixed(0)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PresetsTab(props: {
+  presets: Presets;
+  onActivate: (name: string) => void;
+  onRefresh: () => void;
+  setErr: (s: string | null) => void;
+}) {
+  const names = Object.keys(props.presets.presets);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState<{
+    name: string;
+    bg: string; ink: string; accent: string;
+    display: string; body: string; mono: string;
+    banned: string; notes: string;
+  }>({
+    name: "",
+    bg: "", ink: "", accent: "",
+    display: "", body: "", mono: "",
+    banned: "", notes: "",
+  });
+
+  const startNew = () => {
+    setEditing("__new__");
+    setDraft({ name: "", bg: "", ink: "", accent: "", display: "", body: "", mono: "", banned: "", notes: "" });
+  };
+
+  const startEdit = (name: string) => {
+    const p = props.presets.presets[name];
+    setEditing(name);
+    setDraft({
+      name: p.name,
+      bg: p.palette.bg || "",
+      ink: p.palette.ink || "",
+      accent: p.palette.accent || "",
+      display: p.typography.display || "",
+      body: p.typography.body || "",
+      mono: p.typography.mono || "",
+      banned: p.banned_extra.join("\n"),
+      notes: p.notes,
+    });
+  };
+
+  const save = async () => {
+    if (!draft.name.trim()) return;
+    try {
+      await api.upsertPreset({
+        name: draft.name.trim(),
+        palette: pruneEmpty({ bg: draft.bg, ink: draft.ink, accent: draft.accent }),
+        typography: pruneEmpty({ display: draft.display, body: draft.body, mono: draft.mono }),
+        banned_extra: draft.banned.split("\n").map((s) => s.trim()).filter(Boolean),
+        notes: draft.notes,
+      });
+      setEditing(null);
+      await props.onRefresh();
+    } catch (e: any) {
+      props.setErr(e?.message ?? String(e));
+    }
+  };
+
+  const remove = async (name: string) => {
+    if (name === "default") return;
+    if (!window.confirm(`Delete preset "${name}"?`)) return;
+    try {
+      await api.deletePreset(name);
+      await props.onRefresh();
+    } catch (e: any) {
+      props.setErr(e?.message ?? String(e));
+    }
+  };
+
+  return (
+    <div className="presets-tab">
+      <div className="presets-list">
+        {names.map((n) => {
+          const p = props.presets.presets[n];
+          const swatches = [p.palette.bg, p.palette.ink, p.palette.accent].filter(Boolean);
+          const active = props.presets.active === n;
+          return (
+            <div key={n} className={`preset-card ${active ? "is-active" : ""}`}>
+              <div className="preset-h">
+                <b>{n}</b>
+                {active && <span className="preset-active">active</span>}
+              </div>
+              <div className="preset-swatch">
+                {swatches.map((c, i) => <span key={i} style={{ background: c as string }} />)}
+                {swatches.length === 0 && <span className="muted">no palette anchors</span>}
+              </div>
+              {p.notes && <p className="preset-notes">{p.notes}</p>}
+              <div className="preset-actions">
+                {!active && <button onClick={() => props.onActivate(n)}>Activate</button>}
+                <button onClick={() => startEdit(n)}>Edit</button>
+                {n !== "default" && <button className="danger" onClick={() => remove(n)}>Delete</button>}
+              </div>
+            </div>
+          );
+        })}
+        <button className="preset-new" onClick={startNew}>+ new preset</button>
+      </div>
+
+      {editing && (
+        <div className="preset-editor">
+          <h3>{editing === "__new__" ? "New preset" : `Edit "${editing}"`}</h3>
+          <label>name<input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} disabled={editing !== "__new__"} /></label>
+          <div className="preset-row">
+            <label>bg<input value={draft.bg} placeholder="#0b0d10" onChange={(e) => setDraft({ ...draft, bg: e.target.value })} /></label>
+            <label>ink<input value={draft.ink} placeholder="#e7e9ee" onChange={(e) => setDraft({ ...draft, ink: e.target.value })} /></label>
+            <label>accent<input value={draft.accent} placeholder="#7aa2ff" onChange={(e) => setDraft({ ...draft, accent: e.target.value })} /></label>
+          </div>
+          <div className="preset-row">
+            <label>display font<input value={draft.display} placeholder="Inter" onChange={(e) => setDraft({ ...draft, display: e.target.value })} /></label>
+            <label>body font<input value={draft.body} placeholder="Inter" onChange={(e) => setDraft({ ...draft, body: e.target.value })} /></label>
+            <label>mono font<input value={draft.mono} placeholder="JetBrains Mono" onChange={(e) => setDraft({ ...draft, mono: e.target.value })} /></label>
+          </div>
+          <label>banned patterns (one per line)<textarea rows={3} value={draft.banned} onChange={(e) => setDraft({ ...draft, banned: e.target.value })} /></label>
+          <label>house-style notes<textarea rows={3} value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} /></label>
+          <div className="preset-editor-actions">
+            <button onClick={() => setEditing(null)}>Cancel</button>
+            <button className="primary" onClick={save} disabled={!draft.name.trim()}>Save</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function pruneEmpty(obj: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(obj)) if (v && v.trim()) out[k] = v.trim();
+  return out;
+}
+
+
+/* -------------------------------------------------------------------- */
 /* Utilities                                                             */
 /* -------------------------------------------------------------------- */
+
+function micLabel(state: string): string {
+  if (state === "recording") return "● stop";
+  if (state === "asking") return "…";
+  if (state === "transcribing") return "writing";
+  return "🎙 voice";
+}
 
 function isTyping(target: EventTarget | null): boolean {
   if (!target || !(target instanceof HTMLElement)) return false;

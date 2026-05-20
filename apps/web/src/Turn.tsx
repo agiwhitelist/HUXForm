@@ -18,6 +18,7 @@ import {
 } from "react";
 import { api, FileRec, Turn as TurnSnap } from "./api";
 import { ApprovalRequest, Bridge, TaskEvent } from "./bridge";
+import { useMic } from "./mic";
 
 type Tool = {
   name: string;
@@ -79,6 +80,10 @@ export function Stage(props: {
         } else if (ev.type === "awaiting_steer") {
           setTurn((p) => ({ ...p, status: "awaiting_steer" }));
         } else if (ev.type === "codegen_started") {
+          // Skip replayed codegen_started events — once the iframe is
+          // pointed at a stream URL we don't re-arm it every time SSE
+          // reconnects (which used to cause an infinite reload loop).
+          if (iframeLoaded) return;
           setTurn((p) => ({ ...p, status: "generating" }));
           // Point the iframe at the streaming endpoint NOW so it starts
           // receiving chunks while the LLM is still generating. The
@@ -96,6 +101,13 @@ export function Stage(props: {
         } else if (ev.type === "ui_ready") {
           setTurn((p) => ({ ...p, has_ui: true, status: "running" }));
         } else if (ev.type === "regenerating") {
+          // Only react to live regenerating events. A replayed
+          // `regenerating` from history would otherwise blank the
+          // working iframe whenever SSE reconnects.
+          const live = typeof (ev as any).ts === "number"
+            ? Date.now() / 1000 - (ev as any).ts < 5
+            : true;
+          if (!live) return;
           setTurn((p) => ({ ...p, status: "generating" }));
           setIframeLoaded(false);
           // agui.evolve / manual regenerate — reload the iframe through
@@ -200,8 +212,29 @@ export function Stage(props: {
     return `${humanize(i)} ↘  ${humanize(o)} ↗`;
   }, [turn.usage?.input_tokens, turn.usage?.output_tokens]);
 
+  const mission = (turn.state as any)?.mission as
+    | { id: string; step: number; of: number; title: string }
+    | undefined;
+
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [shareErr, setShareErr] = useState<string | null>(null);
+  const onShare = useCallback(async () => {
+    setShareErr(null);
+    try {
+      const res = await api.share(turn.id);
+      const abs = new URL(res.url, window.location.origin).toString();
+      setShareUrl(abs);
+      try { await navigator.clipboard.writeText(abs); } catch {}
+    } catch (e: any) {
+      setShareErr(e?.message ?? String(e));
+    }
+  }, [turn.id]);
+
   return (
     <section className="stage-app">
+      {mission && (
+        <MissionRibbon step={mission.step} of={mission.of} title={mission.title} />
+      )}
       <Scribe
         goal={turn.user_message}
         live={latestNarration || liveStep}
@@ -211,8 +244,13 @@ export function Stage(props: {
         onCancel={onCancel}
         onRegenerate={onRegenerate}
         onInspector={props.onToggleInspector}
+        onShare={onShare}
+        canShare={turn.has_ui}
         canRegenerate={status === "done" || status === "running" || status === "failed"}
       />
+      {(shareUrl || shareErr) && (
+        <SharePill url={shareUrl} err={shareErr} onClose={() => { setShareUrl(null); setShareErr(null); }} />
+      )}
 
       <div className="stage-canvas">
         <iframe
@@ -267,6 +305,8 @@ function Scribe(props: {
   onRegenerate: () => void;
   canRegenerate: boolean;
   onInspector: () => void;
+  onShare: () => void;
+  canShare: boolean;
 }) {
   const showDot = props.status === "planning" || props.status === "generating" || props.status === "running";
   return (
@@ -282,6 +322,9 @@ function Scribe(props: {
         {props.canRegenerate && (
           <button onClick={props.onRegenerate}>Regenerate</button>
         )}
+        {props.canShare && (
+          <button onClick={props.onShare} title="Public read-only URL with frozen state">Share</button>
+        )}
         {props.canCancel && (
           <button className="danger" onClick={props.onCancel}>
             Cancel
@@ -292,6 +335,37 @@ function Scribe(props: {
         </button>
       </div>
     </header>
+  );
+}
+
+
+function MissionRibbon(props: { step: number; of: number; title: string }) {
+  const pct = props.of > 0 ? ((props.step + 1) / props.of) * 100 : 0;
+  return (
+    <div className="mission-ribbon">
+      <span className="mission-step">step {props.step + 1} / {props.of}</span>
+      <span className="mission-sep">·</span>
+      <span className="mission-title">{props.title}</span>
+      <span className="mission-spacer" />
+      <span className="mission-bar"><span style={{ width: `${pct}%` }} /></span>
+    </div>
+  );
+}
+
+
+function SharePill(props: { url: string | null; err: string | null; onClose: () => void }) {
+  return (
+    <div className={`share-pill ${props.err ? "share-pill-err" : ""}`}>
+      {props.url ? (
+        <>
+          <span className="share-pill-msg">Share URL copied to clipboard.</span>
+          <a className="share-pill-link" href={props.url} target="_blank" rel="noopener noreferrer">{props.url}</a>
+        </>
+      ) : (
+        <span className="share-pill-msg">share failed: {props.err}</span>
+      )}
+      <button className="share-pill-x" onClick={props.onClose} aria-label="close">×</button>
+    </div>
   );
 }
 
@@ -384,6 +458,9 @@ function FollowUp(props: {
   const [text, setText] = useState("");
   const [files, setFiles] = useState<FileRec[]>([]);
   const [busy, setBusy] = useState(false);
+  const mic = useMic({
+    onTranscript: (t) => { if (t) setText((p) => (p ? p + " " : "") + t); },
+  });
 
   const onSend = async () => {
     if (!text.trim() || busy) return;
@@ -438,6 +515,19 @@ function FollowUp(props: {
         />
         attach
       </label>
+      {mic.available && (
+        <button
+          className={`followup-mic mic-${mic.state}`}
+          onClick={() => mic.toggle()}
+          type="button"
+          title={mic.state === "recording" ? "stop & transcribe" : "voice in"}
+          disabled={busy || props.disabled}
+        >
+          {mic.state === "recording" ? "● stop"
+            : mic.state === "transcribing" ? "writing"
+            : "🎙"}
+        </button>
+      )}
       <button
         className="followup-send"
         onClick={onSend}
